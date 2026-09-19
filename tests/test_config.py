@@ -55,10 +55,43 @@ def test_c3_rejects_excessive_decay() -> None:
         validate(bad)
 
 
-def test_c5_rejects_insufficient_channels() -> None:
-    bad = Config(oscillator=replace(OscillatorConfig(), n=8, r_real=4))
+def test_c5_rejects_n_below_rank() -> None:
+    """C5 硬阈值已放宽为 n >= r_max（ADR-014）；n < r_max 必须被拒。"""
+    bad = Config(oscillator=replace(OscillatorConfig(), n=2, r_real=4))
     with pytest.raises(ConfigError, match="违反硬约束"):
         validate(bad)
+
+
+def test_c5_low_redundancy_only_warns() -> None:
+    """n = r_max 恰好满足硬阈值；冗余不足只触发警戒，不阻断。"""
+    results = validate(Config(oscillator=replace(OscillatorConfig(), n=4, r_real=4)))
+    c5 = next(r for r in results if r.name.startswith("C5 空间"))
+    assert c5.passed is True
+    assert c5.warning is True
+
+
+def test_c5_accepts_the_regime_where_effect_is_measurable() -> None:
+    """回归：ADR-013 认定的主工作点 n ∈ {4, 8} 必须能通过配置校验。
+
+    原 C5（n >= 4r）会拒绝这些取值，从而把效应可测区间排除在外。
+    """
+    for n in (4, 8):
+        results = validate(Config(oscillator=replace(OscillatorConfig(), n=n)))
+        assert all(r.passed for r in results), f"n={n} 不应违反硬约束"
+
+
+def test_c5b_embed_grid_validated() -> None:
+    """C5b：时延嵌入通道的嵌入维数必须 >= r_complex。"""
+    results = validate(Config())
+    c5b = next(r for r in results if r.name.startswith("C5b"))
+    assert c5b.passed
+    with pytest.raises(ConfigError):
+        validate(Config(oscillator=replace(OscillatorConfig(), embed_grid=(1, 8))))
+
+
+def test_n_grid_rejects_below_rank() -> None:
+    with pytest.raises(ConfigError):
+        validate(Config(oscillator=replace(OscillatorConfig(), n_grid=(2, 8))))
 
 
 def test_structural_invariants_rejected() -> None:

@@ -154,3 +154,69 @@ def test_local_snr_reported_per_mode(cfg: Config) -> None:
 def test_rank_for_matches_channel(cfg: Config) -> None:
     assert rank_for(cfg, "real") == cfg.oscillator.r_real
     assert rank_for(cfg, "complex") == cfg.oscillator.r_complex
+    assert rank_for(cfg, "hankel") == cfg.oscillator.r_complex
+
+
+# --------------------------------------------------------------------------- 时延嵌入通道
+@pytest.mark.parametrize("embed", [4, 8, 16])
+def test_hankel_rank_and_exact_linearity(cfg: Config, embed: int) -> None:
+    """时延嵌入通道：无噪时秩 = 模态数，且 Y = A X 精确成立。"""
+    system = build(cfg, "hankel", np.random.default_rng(0), 150, embed=embed)
+    assert system.X.shape == (embed, 150)
+    assert system.rank_true == cfg.oscillator.r_complex
+
+    sv = np.linalg.svd(np.vstack([system.X, system.Y]), compute_uv=False)
+    r = cfg.oscillator.r_complex
+    assert sv[r] / sv[0] < 1e-12, f"sigma_{{r+1}}/sigma_1 = {sv[r]/sv[0]:.3e}"
+
+    At, *_ = np.linalg.lstsq(system.X.T, system.Y.T, rcond=None)
+    resid = np.linalg.norm(system.Y - At.T @ system.X) / np.linalg.norm(system.Y)
+    assert resid < 1e-12, f"线性关系残差 {resid:.3e}"
+
+
+@pytest.mark.parametrize("embed", [4, 8])
+def test_hankel_dmd_exact_without_noise(cfg: Config, embed: int) -> None:
+    from dmdnoise.estimators import DMD, TDMD, pair_to_truth
+
+    system = build(cfg, "hankel", np.random.default_rng(1), 150, embed=embed)
+    r = cfg.oscillator.r_complex
+    for est in (DMD(), TDMD()):
+        res = est.fit(system.X, system.Y, r, cfg.oscillator.dt)
+        pr = pair_to_truth(res.freqs, system.f_true)
+        assert pr.ok, pr.reason
+        rel = np.abs(pr.freqs - system.f_true) / system.f_true
+        assert rel.max() < 1e-10, f"{est.name} 最大相对误差 {rel.max():.3e}"
+
+
+def test_hankel_requires_embed(cfg: Config) -> None:
+    with pytest.raises(SimulatorError):
+        build(cfg, "hankel", np.random.default_rng(0), 50)
+    with pytest.raises(SimulatorError):
+        build(cfg, "hankel", np.random.default_rng(0), 50, embed=1)
+
+
+def test_hankel_noise_overlap(cfg: Config) -> None:
+    system = build(cfg, "hankel", np.random.default_rng(2), 120, embed=8)
+    sigma = sigma_from_snr(system.X, 10.0)
+    Xn, Yn, meta = inject(system.X, system.Y, sigma, np.random.default_rng(3),
+                          mode="trajectory")
+    assert meta["overlap_ok"] is True
+    assert np.array_equal(Xn[:, 1:] - system.X[:, 1:], Yn[:, :-1] - system.Y[:, :-1])
+
+
+# --------------------------------------------------------------------------- 幅度比（ADR-012）
+@pytest.mark.parametrize("channel", ["real", "complex", "hankel"])
+@pytest.mark.parametrize("ratio", [1.0, 1.5, 2.0])
+def test_amplitude_ratio_is_achieved(cfg: Config, channel: str, ratio: float) -> None:
+    """幅度比是显式实验因子，构造必须精确达到目标比值。"""
+    kw = {"embed": 8} if channel == "hankel" else {}
+    system = build(cfg, channel, np.random.default_rng(5), 200, amp_ratio=ratio, **kw)
+    assert abs(system.energy_ratio - ratio) / ratio < 1e-9, (
+        f"{channel}: 目标 {ratio}，实际 {system.energy_ratio}"
+    )
+    assert system.meta["amp_ratio_target"] == ratio
+
+
+def test_amplitude_ratio_rejects_nonpositive(cfg: Config) -> None:
+    with pytest.raises(SimulatorError):
+        build(cfg, "complex", np.random.default_rng(0), 50, amp_ratio=0.0)

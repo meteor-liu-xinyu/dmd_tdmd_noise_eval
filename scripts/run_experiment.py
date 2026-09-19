@@ -3,7 +3,6 @@
 用法：
     python scripts/run_experiment.py --exp exp1 --smoke
     python scripts/run_experiment.py --exp exp1
-    python scripts/run_experiment.py --exp exp1 --config configs/exp1.yaml
 
 ⚠️ 必须在 import numpy 之前锁定 BLAS 线程数（见 ADR-010 与 algorithm-spec §12.1）。
 """
@@ -26,88 +25,86 @@ from pathlib import Path  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-import numpy as np  # noqa: E402
-
-from dmdnoise.config import Config, config_fingerprint, save_fingerprint, validate  # noqa: E402
-from dmdnoise.experiments import decision_notes, run_exp1  # noqa: E402
+from dmdnoise.config import (  # noqa: E402
+    Config,
+    config_fingerprint,
+    load_config,
+    save_fingerprint,
+    validate,
+)
+from dmdnoise.experiments import (  # noqa: E402
+    Slice,
+    annotate_reportable,
+    headline,
+    run_exp1,
+)
 
 LOG = logging.getLogger("run_experiment")
 
+SMOKE_SLICES = (
+    Slice("complex", 10.0, 4, 1.0, label="n"),
+    Slice("complex", 10.0, 8, 1.0, label="n"),
+    Slice("complex", -5.0, 8, 1.0, label="snr"),
+    Slice("hankel", 10.0, 8, 1.0, label="embed"),
+)
 
-def _make_progress(tag: str):
-    state = {"t0": time.perf_counter()}
 
-    def cb(i: int, n: int) -> None:
-        if i == 0:
-            state["t0"] = time.perf_counter()
-            return
-        el = time.perf_counter() - state["t0"]
-        LOG.info("%s: %d/%d (%.1fs, 预计总 %.1fs)", tag, i, n, el, el * n / max(i, 1))
+def make_progress(tag: str):
+    def cb(done: int, total: int, desc: str = "") -> None:
+        LOG.info("%s: %d/%d %s", tag, done, total, desc)
 
     return cb
 
 
-def _run_exp1(cfg: Config, out: Path, *, smoke: bool) -> int:
+def run_exp1_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
     if smoke:
-        channels = ("real",)
-        snr_res = (0.0, -5.0)
-        snr_up = (10.0,)
-        j = 600
-        m = 200
+        slices = list(SMOKE_SLICES)
+        j, m = 400, 200
         LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+        n_slices = len(slices)
     else:
-        channels = ("real", "complex")
-        snr_res = (0.0, -5.0, -10.0)
-        snr_up = (20.0, 10.0, 5.0)
-        j = cfg.grid.j_main
-        m = 200
+        slices = None
+        j, m = cfg.grid.j_main, 200
+        n_slices = len(__import__("dmdnoise.experiments", fromlist=["x"]).default_slices(cfg))
 
-    LOG.info("实验一：channels=%s, A组=%s, B组=%s, m=%d, J=%d",
-             channels, snr_res, snr_up, m, j)
-    res = run_exp1(cfg, channels=channels, snr_resolvable=snr_res,
-                   snr_upper=snr_up, m=m, j_total=j,
-                   progress=_make_progress("exp1"))
+    LOG.info("实验一：%d 个切片，J=%d，m=%d", n_slices, j, m)
+
+    res = run_exp1(cfg, slices=slices, m=m, j_total=j,
+                   progress=make_progress("exp1"))
 
     out.mkdir(parents=True, exist_ok=True)
     suffix = "_smoke" if smoke else ""
-    p_rows = out / f"exp1_bias_variance{suffix}.csv"
-    p_paired = out / f"exp1_paired{suffix}.csv"
-    p_notes = out / f"exp1_reportable{suffix}.csv"
-    res.rows.to_csv(p_rows, index=False, encoding="utf-8")
-    res.paired.to_csv(p_paired, index=False, encoding="utf-8")
-    decision_notes(res).to_csv(p_notes, index=False, encoding="utf-8")
+    res.rows.to_csv(out / f"exp1_bias_variance{suffix}.csv", index=False, encoding="utf-8")
+    res.paired.to_csv(out / f"exp1_paired{suffix}.csv", index=False, encoding="utf-8")
+    annotate_reportable(res).to_csv(out / f"exp1_reportable{suffix}.csv",
+                                    index=False, encoding="utf-8")
+    headline(res).to_csv(out / f"exp1_headline{suffix}.csv", index=False, encoding="utf-8")
 
-    meta = {
-        "experiment": "exp1",
-        "smoke": smoke,
-        "fingerprint": res.fingerprint,
-        **res.meta,
-    }
+    meta = {"experiment": "exp1", "smoke": smoke, "fingerprint": res.fingerprint, **res.meta}
     (out / f"exp1_meta{suffix}.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    LOG.info("已写出：%s", p_rows.name)
-    _print_headline(res)
+    LOG.info("已写出 exp1_*.csv（%d 行明细）", len(res.rows))
+    print_summary(res)
     return 0
 
 
-def _print_headline(res) -> None:
-    df = decision_notes(res)
+def print_summary(res) -> None:
+    df = headline(res)
     if df.empty:
         LOG.warning("结果为空")
         return
-    print("\n=== 可报告口径 ===", file=sys.stdout)
-    with_ = df.to_string(index=False, max_colwidth=22)
-    print(with_, file=sys.stdout)
+    print("\n=== 各网格点汇总（相对偏差）===", file=sys.stdout)
+    print(df.to_string(index=False), file=sys.stdout)
 
-    if not res.paired.empty:
-        pr = res.paired[res.paired["stat"] == "std"]
-        if not pr.empty:
-            print("\n=== 方差代价（std_TDMD / std_DMD）===", file=sys.stdout)
-            cols = ["channel", "snr_db", "mode", "std_tdmd_over_dmd",
-                    "std_ci_lo", "std_ci_hi", "paired_effective"]
-            print(pr[cols].to_string(index=False), file=sys.stdout)
+    pr = res.paired
+    if pr is not None and not pr.empty:
+        std = pr[pr["stat"] == "std"]
+        if not std.empty:
+            print("\n=== 方差代价（std_TDMD / std_DMD，配对 bootstrap）===", file=sys.stdout)
+            cols = ["channel", "axis", "snr_db", "n_axis", "amp_ratio", "mode",
+                    "ratio", "ci_lo", "ci_hi", "paired_effective"]
+            print(std[cols].to_string(index=False), file=sys.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -126,8 +123,6 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.config:
-        from dmdnoise.config import load_config
-
         cfg, results = load_config(args.config)
     else:
         cfg = Config()
@@ -136,14 +131,13 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out) if args.out else ROOT / cfg.run.out_dir / "tables"
 
     LOG.info("配置指纹 %s", config_fingerprint(cfg))
-    LOG.info("约束状态：通过=%s，警戒=%s",
+    LOG.info("约束：通过=%s，警戒=%s",
              all(r.passed for r in results), [r.name for r in results if r.warning])
+    LOG.info("BLAS 线程 OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
     save_fingerprint(cfg, results, out / "config_meta.json")
 
-    LOG.info("BLAS 线程：OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
-
     t0 = time.perf_counter()
-    rc = _run_exp1(cfg, out, smoke=args.smoke)
+    rc = run_exp1_cli(cfg, out, smoke=args.smoke)
     LOG.info("总耗时 %.1f s", time.perf_counter() - t0)
     return rc
 

@@ -14,6 +14,7 @@ from dmdnoise.sim.oscillator import (
     System,
     build,
     build_complex,
+    build_hankel,
     build_real,
     rank_for,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "System",
     "build",
     "build_complex",
+    "build_hankel",
     "build_real",
     "eps_ratio",
     "inject",

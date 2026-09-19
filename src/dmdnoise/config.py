@@ -50,7 +50,12 @@ class Mode:
 class OscillatorConfig:
     fs: float = 200.0
     modes: tuple[Mode, ...] = (Mode(12.0, 0.005), Mode(17.5, 0.004))
-    n: int = 64
+    n: int = 8
+    """多通道通道（real / complex）的传感器数。主工作点 4–8（ADR-013）。"""
+    n_grid: tuple[int, ...] = (4, 8, 16, 32, 64)
+    """通道数实验轴。`n` 直接决定效应量能否被测出，见 algorithm-spec §7.1.4。"""
+    embed_grid: tuple[int, ...] = (4, 8, 16, 32, 64)
+    """时延嵌入（Hankel）通道的嵌入维数实验轴。"""
     r_real: int = 4
     r_complex: int = 2
     c_balance_tol: float = 0.10
@@ -62,6 +67,10 @@ class OscillatorConfig:
     @property
     def freqs(self) -> tuple[float, ...]:
         return tuple(m.f for m in self.modes)
+
+    @property
+    def r_max(self) -> int:
+        return max(self.r_real, self.r_complex)
 
 
 @dataclass(frozen=True)
@@ -187,29 +196,55 @@ def _check_c4(cfg: OscillatorConfig, m_min: int) -> ConstraintResult:
 
 
 def _check_c5(cfg: OscillatorConfig) -> ConstraintResult:
-    need = max(4 * cfg.r_real, 2 * cfg.r_complex)
+    """C5 空间维数充分。
+
+    ADR-014：硬阈值由 `n >= 4r` 放宽为 `n >= r`（真实要求是观测矩阵列满秩）。
+    原 `4r` 是任意保守值，其后果是把项目效应可测的区间（n = 4/8）直接排除。
+    另设"建议冗余度" `n >= 2r` 作为警戒带提示，不阻断。
+    """
+    r = cfg.r_max
+    rec = 2 * r
     return ConstraintResult(
         "C5 空间维数充分",
-        f"n={cfg.n}, 4r={4 * cfg.r_real}",
-        cfg.n >= need,
-        False,
-        "要求 n >= 4r",
+        f"n={cfg.n}, r_max={r}",
+        cfg.n >= r,
+        cfg.n < rec,
+        f"硬要求 n >= r_max={r}；建议 n >= 2*r_max={rec}（冗余度，非阻断）",
     )
 
 
-def check_c6(energy_ratio: float, tol: float = 0.10) -> ConstraintResult:
+def _check_c5b(embed_min: int, cfg: OscillatorConfig) -> ConstraintResult:
+    """C5b 时延嵌入通道的嵌入维数充分（Hankel 通道，ADR-013）。"""
+    r = cfg.r_complex
+    return ConstraintResult(
+        "C5b 嵌入维数充分",
+        f"L_min={embed_min}",
+        embed_min >= r,
+        embed_min < 2 * r,
+        f"硬要求 L >= r_complex={r}",
+    )
+
+
+def check_c6(energy_ratio: float, target: float = 1.0, tol: float = 0.10,
+             hard_eps: float = 1e-9) -> ConstraintResult:
     """C6 模态可观测性平衡。需在仿真器构造出数据后调用。
 
     energy_ratio = E_max / E_min（两模态可观测能量之比）。
+    target 为构造目标（ADR-012：默认 1.0，可设为 1.5–2.0 作为实验因子）。
+
+    硬约束只要求落在 C6_HARD 带内（端点按相对容差 hard_eps 放宽，
+    以免浮点误差拒绝恰好取到边界的目标值）；
+    "未达构造目标"仅触发警戒，不阻断。
     """
-    ok = C6_HARD[0] <= energy_ratio <= C6_HARD[1]
-    warn = not (1.0 - tol <= energy_ratio <= 1.0 + tol)
+    lo, hi = C6_HARD[0] * (1.0 - hard_eps), C6_HARD[1] * (1.0 + hard_eps)
+    ok = lo <= energy_ratio <= hi
+    warn = not (abs(energy_ratio - target) <= tol * target)
     return ConstraintResult(
         "C6 模态可观测性平衡",
         f"{energy_ratio:.4f}",
         ok,
         warn,
-        f"要求 E_max/E_min ∈ {C6_HARD}，构造目标 |比值-1| <= {tol}",
+        f"硬要求 E_max/E_min ∈ {C6_HARD}；构造目标 {target:.2f}（容差 {tol:.0%}）",
     )
 
 
@@ -225,11 +260,16 @@ def validate(cfg: Config, *, strict: bool = True) -> list[ConstraintResult]:
         _check_c3(cfg.oscillator, cfg.grid.m_max),
         _check_c4(cfg.oscillator, cfg.grid.m_min),
         _check_c5(cfg.oscillator),
+        _check_c5b(min(cfg.oscillator.embed_grid), cfg.oscillator),
     ]
 
     # 结构性约束
     if cfg.oscillator.fs <= 0:
         raise ConfigError("fs 必须为正")
+    if cfg.oscillator.n_grid and min(cfg.oscillator.n_grid) < cfg.oscillator.r_max:
+        raise ConfigError(f"n_grid 含 n < r_max={cfg.oscillator.r_max} 的取值")
+    if cfg.oscillator.embed_grid and min(cfg.oscillator.embed_grid) < cfg.oscillator.r_complex:
+        raise ConfigError(f"embed_grid 含 L < r_complex={cfg.oscillator.r_complex} 的取值")
     if cfg.grid.m_min < 2 * max(cfg.oscillator.r_real, cfg.oscillator.r_complex):
         raise ConfigError("m_min 过小，无法支撑截断秩")
     if cfg.grid.m_min > cfg.grid.m_max:

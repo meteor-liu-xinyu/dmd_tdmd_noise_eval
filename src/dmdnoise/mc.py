@@ -72,10 +72,33 @@ class CellResult:
         return est[ok]
 
     def errors(self, method: str, mode: int = 0, *, relative: bool = True) -> NDArray:
-        """误差序列 f_hat - f_true（默认相对误差），仅取配对成功样本。"""
+        """误差序列 f_hat - f_true（默认相对误差），仅取**该方法**配对成功样本。"""
         v = self.valid(method)[:, mode]
         d = v - self.f_true[mode]
         return d / self.f_true[mode] if relative else d
+
+    def paired_errors(self, mode: int = 0, *, relative: bool = True
+                      ) -> tuple[NDArray, NDArray]:
+        """返回 (dmd, tdmd) 在**两法均配对成功**的公共子集上的误差。
+
+        ⚠️ 配对比较必须取公共子集。若两法各自过滤有效样本，失败集合不同，
+           配对结构被破坏，`Var(Δ)` 的自检会失真、比值 CI 也不可信。
+        """
+        ok = self.pair_ok["dmd"] & self.pair_ok["tdmd"]
+        if ok.sum() == 0:
+            empty = np.empty(0)
+            return empty, empty.copy()
+        d = self.estimates["dmd"][ok, mode] - self.f_true[mode]
+        t = self.estimates["tdmd"][ok, mode] - self.f_true[mode]
+        if relative:
+            d = d / self.f_true[mode]
+            t = t / self.f_true[mode]
+        return d, t
+
+    @property
+    def n_paired(self) -> int:
+        """两法均配对成功的实现数。"""
+        return int((self.pair_ok["dmd"] & self.pair_ok["tdmd"]).sum())
 
     def summary_row(self) -> dict[str, Any]:
         return {
@@ -90,7 +113,9 @@ class CellResult:
 
 def _estimate_cell(cfg: Config, channel: str, snr_db: float, m: int, j_total: int,
                    methods: Sequence[str], *, master_seed: int,
-                   progress: Callable[[int, int], None] | None = None) -> CellResult:
+                   progress: Callable[[int, int], None] | None = None,
+                   embed: int | None = None, amp_ratio: float = 1.0,
+                   axis_tag: str = "") -> CellResult:
     """公共随机数配对比较：两法共享同一条噪声实现。"""
     r = rank_for(cfg, channel)
     est: dict[str, list[NDArray]] = {k: [] for k in methods}
@@ -98,18 +123,19 @@ def _estimate_cell(cfg: Config, channel: str, snr_db: float, m: int, j_total: in
     f_true: NDArray | None = None
     sigma_used = float("nan")
     pair_fail_detail: dict[str, int] = {k: 0 for k in methods}
+    key_extra = (axis_tag, embed, amp_ratio)
 
     for j in range(j_total):
         if progress is not None and j % max(1, j_total // 10) == 0:
             progress(j, j_total)
 
-        rng_phase = derive_rng(master_seed, channel, snr_db, m, PURPOSE_PHASE, j)
-        system = build(cfg, channel, rng_phase, m)
+        rng_phase = derive_rng(master_seed, channel, snr_db, m, PURPOSE_PHASE, *key_extra, j)
+        system = build(cfg, channel, rng_phase, m, embed=embed, amp_ratio=amp_ratio)
         if f_true is None:
             f_true = system.f_true
             sigma_used = sigma_from_snr(system.X, snr_db, convention=cfg.noise.convention)
 
-        rng_noise = derive_rng(master_seed, channel, snr_db, m, PURPOSE_NOISE, j)
+        rng_noise = derive_rng(master_seed, channel, snr_db, m, PURPOSE_NOISE, *key_extra, j)
         Xn, Yn, _ = inject(system.X, system.Y, sigma_used, rng_noise, mode=cfg.noise.mode)
 
         for name in methods:
@@ -140,16 +166,23 @@ def _estimate_cell(cfg: Config, channel: str, snr_db: float, m: int, j_total: in
             "snr_convention": cfg.noise.convention,
             "master_seed": master_seed,
             "pair_fail": pair_fail_detail,
+            "n": cfg.oscillator.n if channel != "hankel" else embed,
+            "embed": embed,
+            "amp_ratio": amp_ratio,
+            "axis_tag": axis_tag,
         },
     )
 
 
 def run_cell(cfg: Config, channel: str, snr_db: float, m: int, j_total: int,
              *, methods: Sequence[str] = ("dmd", "tdmd"), master_seed: int | None = None,
-             progress: Callable[[int, int], None] | None = None) -> CellResult:
+             progress: Callable[[int, int], None] | None = None,
+             embed: int | None = None, amp_ratio: float = 1.0,
+             axis_tag: str = "") -> CellResult:
     return _estimate_cell(cfg, channel, snr_db, m, j_total, methods,
                           master_seed=master_seed if master_seed is not None else cfg.run.seed,
-                          progress=progress)
+                          progress=progress, embed=embed, amp_ratio=amp_ratio,
+                          axis_tag=axis_tag)
 
 
 def run_m_scan(cfg: Config, channel: str, snr_db: float, m_values: Sequence[int],

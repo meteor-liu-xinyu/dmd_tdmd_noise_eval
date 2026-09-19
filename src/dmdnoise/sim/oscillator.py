@@ -23,11 +23,24 @@ from dmdnoise.config import Config, ConstraintResult, check_c6
 
 LOG = logging.getLogger(__name__)
 
-CHANNELS = ("real", "complex")
+CHANNELS = ("real", "complex", "hankel")
 
 
 class SimulatorError(ValueError):
     """仿真器输入非法。"""
+
+
+def _amp_scale(n_modes: int, amp_ratio: float) -> NDArray:
+    """各模态的能量缩放因子，使 E_max/E_min = amp_ratio 且几何均值 = 1。
+
+    amp_ratio = 1 时退化为全 1（平衡态）。
+    """
+    if amp_ratio <= 0.0:
+        raise SimulatorError("amp_ratio 必须为正")
+    if n_modes == 1 or amp_ratio == 1.0:
+        return np.ones(n_modes)
+    exps = np.array([(n_modes - 1 - 2 * k) / (2.0 * (n_modes - 1)) for k in range(n_modes)])
+    return amp_ratio**exps
 
 
 @dataclass(frozen=True)
@@ -110,7 +123,8 @@ def _rot(theta: float) -> NDArray:
     return np.array([[c, s], [-s, c]], dtype=float)
 
 
-def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
+def build_real(cfg: Config, rng: np.random.Generator, m: int,
+               *, amp_ratio: float = 1.0) -> System:
     """实值主通道：4 维状态空间 + n 通道观测，r_true = 4。"""
     oc = cfg.oscillator
     mu = _mu(cfg)
@@ -122,6 +136,7 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
         raise SimulatorError(f"n={oc.n} 不足以观测 {dim} 维状态")
 
     C = rng.standard_normal((oc.n, dim))
+    scale = _amp_scale(n_modes, amp_ratio)
 
     # --- 相位随机化 + C6 平衡（按实现精确配平） ---
     # 注意：2x2 旋转与 B_k 可交换，故 R(theta) 作用在初状态上等价于相位平移。
@@ -135,7 +150,7 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
         g = np.linalg.norm(C[:, 2 * k : 2 * k + 2] @ _krylov(blk, u, m))
         if g <= 0.0 or not np.isfinite(g):
             raise SimulatorError(f"模态 {k} 不可观测（能量 {g}）")
-        z0[2 * k : 2 * k + 2] = u / g
+        z0[2 * k : 2 * k + 2] = scale[k] * u / g
 
     # --- 轨迹（闭式向量化） ---
     Zs = np.empty((dim, m + 1))
@@ -150,7 +165,8 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
     energy = np.array(
         [np.linalg.norm(C[:, 2 * k : 2 * k + 2] @ Zs[2 * k : 2 * k + 2, :]) for k in range(n_modes)]
     )
-    c6 = check_c6(float(energy.max() / energy.min()), oc.c_balance_tol)
+    c6 = check_c6(float(energy.max() / energy.min()), target=amp_ratio,
+                  tol=oc.c_balance_tol)
     if not c6.passed:
         raise SimulatorError(f"C6 硬约束失败：可观测能量比 {c6.value} 超出 {c6.detail}")
     if c6.warning:
@@ -171,12 +187,14 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
             "n_modes": n_modes,
             "dim": dim,
             "energy_ratio": float(energy.max() / energy.min()),
+            "amp_ratio_target": amp_ratio,
         },
     )
 
 
 # --------------------------------------------------------------------------- 复值通道
-def build_complex(cfg: Config, rng: np.random.Generator, m: int) -> System:
+def build_complex(cfg: Config, rng: np.random.Generator, m: int,
+                  *, amp_ratio: float = 1.0) -> System:
     """复值对照通道：解析信号，r_true = n_modes。"""
     oc = cfg.oscillator
     mu = _mu(cfg)
@@ -185,18 +203,19 @@ def build_complex(cfg: Config, rng: np.random.Generator, m: int) -> System:
     V = rng.standard_normal((oc.n, n_modes)) + 1j * rng.standard_normal((oc.n, n_modes))
     vnorm = np.linalg.norm(V, axis=0)
 
-    # C6 平衡：|c_k| 使各模态时间累积能量相等
+    # C6 平衡：|c_k| 使各模态时间累积能量等于目标
     j = np.arange(m + 1)
     decay = np.sqrt((np.abs(mu)[None, :] ** (2 * j[:, None])).sum(axis=0))
-    amp = 1.0 / (vnorm * decay)
+    amp = _amp_scale(n_modes, amp_ratio) / (vnorm * decay)
     phase = rng.uniform(0.0, 2.0 * math.pi, n_modes)
     c = amp * np.exp(1j * phase)
 
     Zs = (V * c[None, :]) @ (mu[None, :] ** j[:, None]).T
     X, Y = Zs[:, :m], Zs[:, 1 : m + 1]
 
-    energy = np.abs(c) * vnorm * decay          # 按构造恒为全 1
-    c6 = check_c6(float(energy.max() / energy.min()), oc.c_balance_tol)
+    energy = np.abs(c) * vnorm * decay
+    c6 = check_c6(float(energy.max() / energy.min()), target=amp_ratio,
+                  tol=oc.c_balance_tol)
     if not c6.passed:
         raise SimulatorError(f"C6 硬约束失败：可观测能量比 {c6.value}")
     if c6.warning:
@@ -217,17 +236,92 @@ def build_complex(cfg: Config, rng: np.random.Generator, m: int) -> System:
             "n_modes": n_modes,
             "dim": 2 * n_modes,
             "energy_ratio": float(energy.max() / energy.min()),
+            "amp_ratio_target": amp_ratio,
         },
     )
 
 
-def build(cfg: Config, channel: str, rng: np.random.Generator, m: int) -> System:
+# --------------------------------------------------------------------------- 时延嵌入通道
+def _hankel_rows(u: NDArray, length: int, m: int) -> NDArray:
+    """由标量序列 u（长度 m+length）构造 X = [u[j:j+L]]_{j=0..m-1}，(L, m)。"""
+    W = np.lib.stride_tricks.sliding_window_view(u, length)   # (m+1, length)
+    return np.ascontiguousarray(W[:m].T)
+
+
+def build_hankel(cfg: Config, rng: np.random.Generator, m: int, *,
+                 embed: int, amp_ratio: float = 1.0) -> System:
+    """时延嵌入通道：单测点标量序列 + L 维时延嵌入，r_true = n_modes。
+
+    对应真实部署中"单/少测点 + 时延构造虚拟通道"的形态（ADR-013）。
+    嵌入维数 L 即该通道的"空间维数 n"。
+
+    X[i, j] = u[i+j],  Y[i, j] = u[i+j+1],  i = 0..L-1,  j = 0..m-1
+    无噪时 rank(Z) = n_modes，且 Y = A_true X 精确成立。
+    """
+    oc = cfg.oscillator
+    mu = _mu(cfg)
+    n_modes = mu.size
+    length = int(embed)
+    if length < n_modes:
+        raise SimulatorError(f"嵌入维数 L={length} 小于模态数 {n_modes}")
+
+    j = np.arange(m + length)
+    basis = np.stack([mu[k] ** j for k in range(n_modes)])      # (n_modes, m+L)
+    gnorm = np.array([np.linalg.norm(_hankel_rows(g, length, m)) for g in basis])
+
+    scale = _amp_scale(n_modes, amp_ratio)
+    phase = rng.uniform(0.0, 2.0 * math.pi, n_modes)
+    c = (scale / gnorm) * np.exp(1j * phase)
+
+    u = (c[:, None] * basis).sum(axis=0)                       # 单测点标量序列
+    W = np.lib.stride_tricks.sliding_window_view(u, length)    # (m+1, length)
+    X = np.ascontiguousarray(W[:m].T)
+    Y = np.ascontiguousarray(W[1 : m + 1].T)
+
+    energy = np.abs(c) * gnorm
+    c6 = check_c6(float(energy.max() / energy.min()), target=amp_ratio,
+                  tol=oc.c_balance_tol)
+    if not c6.passed:
+        raise SimulatorError(f"C6 硬约束失败：可观测能量比 {c6.value}")
+    if c6.warning:
+        LOG.warning("C6 进入警戒带：能量比 %s", c6.value)
+
+    f_true = _true_freqs(mu, oc.dt)
+    return System(
+        channel="hankel",
+        X=X,
+        Y=Y,
+        f_true=f_true,
+        mu_true=mu[np.argsort(np.abs(np.angle(mu)))],
+        rank_true=n_modes,
+        mode_energy=energy,
+        c6=c6,
+        meta={
+            "construction": "hankel_delay_embedding",
+            "n_modes": n_modes,
+            "embed": length,
+            "energy_ratio": float(energy.max() / energy.min()),
+            "amp_ratio_target": amp_ratio,
+        },
+    )
+
+
+def build(cfg: Config, channel: str, rng: np.random.Generator, m: int, *,
+          embed: int | None = None, amp_ratio: float = 1.0) -> System:
     if channel == "real":
-        return build_real(cfg, rng, m)
+        return build_real(cfg, rng, m, amp_ratio=amp_ratio)
     if channel == "complex":
-        return build_complex(cfg, rng, m)
+        return build_complex(cfg, rng, m, amp_ratio=amp_ratio)
+    if channel == "hankel":
+        if embed is None:
+            raise SimulatorError("channel='hankel' 时必须给出 embed（嵌入维数 L）")
+        return build_hankel(cfg, rng, m, embed=embed, amp_ratio=amp_ratio)
     raise SimulatorError(f"未知通道 {channel!r}，可选 {CHANNELS}")
 
 
 def rank_for(cfg: Config, channel: str) -> int:
-    return cfg.oscillator.r_real if channel == "real" else cfg.oscillator.r_complex
+    if channel == "real":
+        return cfg.oscillator.r_real
+    if channel in ("complex", "hankel"):
+        return cfg.oscillator.r_complex
+    raise SimulatorError(f"未知通道 {channel!r}")

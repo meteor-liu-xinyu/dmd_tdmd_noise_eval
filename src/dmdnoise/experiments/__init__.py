@@ -3,19 +3,21 @@
 from dmdnoise.experiments.exp1_bias_variance import (
     M_DEFAULT,
     METHODS,
-    SNR_RESOLVABLE,
-    SNR_UPPER_BOUND,
     Exp1Result,
-    decision_notes,
+    Slice,
+    annotate_reportable,
+    default_slices,
+    headline,
     run as run_exp1,
 )
 
 __all__ = [
     "M_DEFAULT",
     "METHODS",
-    "SNR_RESOLVABLE",
-    "SNR_UPPER_BOUND",
     "Exp1Result",
-    "decision_notes",
+    "Slice",
+    "annotate_reportable",
+    "default_slices",
+    "headline",
     "run_exp1",
 ]
