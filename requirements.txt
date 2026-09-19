@@ -1,0 +1,15 @@
+# 运行时依赖（Python 3.12）
+# 安装: .venv/Scripts/python.exe -m pip install -r requirements.txt
+
+numpy>=2.0,<3
+scipy>=1.13
+
+# 结果呈现
+matplotlib>=3.8
+pandas>=2.2
+
+# 配置
+pyyaml>=6.0
+
+# 测试
+pytest>=8.0

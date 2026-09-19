@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dmdnoise"
+version = "0.1.0"
+description = "噪声数据下 DMD 与 TDMD 频率估计的偏差-方差评估及 TDMD 强收敛性验证"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0,<3",
+    "scipy>=1.13",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error::RuntimeWarning"]

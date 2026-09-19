@@ -1,0 +1,37 @@
+# --- 环境 ---
+.venv/
+venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- 临时文件（不入版本库）---
+tmp/
+
+# --- 项目产出（可重新生成，不入版本库）---
+results/raw/*
+results/tables/*
+results/figures/*
+!results/**/.gitkeep
+*.npz
+*.h5
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- 日志 ---
+*.log
+
+# --- Agent ---
+/.workbuddy
