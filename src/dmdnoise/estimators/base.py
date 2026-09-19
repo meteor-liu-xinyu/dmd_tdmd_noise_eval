@@ -60,6 +60,7 @@ class EstimateResult:
     eigenvalues: NDArray        # (r,) 离散特征值 mu，与 freqs 同序
     modes: NDArray              # (n, r)
     diagnostics: Diagnostic
+    operator: NDArray | None = None   # 降维算子 A~（r, r），供退化判据 D1 使用
 
     def __post_init__(self) -> None:
         if self.freqs.shape != self.eigenvalues.shape:

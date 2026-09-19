@@ -13,7 +13,7 @@ import hashlib
 import json
 import logging
 import math
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -266,22 +266,42 @@ def constraint_summary(results: list[ConstraintResult]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- 加载
+def _nested_dataclass(cls: type) -> dict[str, type]:
+    """返回字段名 -> 嵌套 dataclass 类型 的映射（含 default / default_factory）。"""
+    out: dict[str, type] = {}
+    for f in fields(cls):
+        cand: Any = None
+        if f.default is not MISSING:
+            cand = f.default
+        elif f.default_factory is not MISSING:  # type: ignore[misc]
+            try:
+                cand = f.default_factory()
+            except Exception:  # pragma: no cover - 默认工厂不应失败
+                cand = None
+        if cand is not None and is_dataclass(cand) and not isinstance(cand, type):
+            out[f.name] = type(cand)
+    return out
+
+
 def _construct(cls: type, data: dict[str, Any]) -> Any:
-    """递归构造 dataclass，tuple 字段按 schema 默认值类型还原。"""
+    """按 dataclass schema 递归构造；嵌套 dataclass 逐层展开，元组字段还原为 tuple。"""
     if not isinstance(data, dict):
         return data
+    nested = _nested_dataclass(cls)
     kwargs: dict[str, Any] = {}
     for f in fields(cls):
         if f.name not in data:
             continue
         raw = data[f.name]
-        default = f.default if f.default is not field else None
-        if f.name == "modes" and isinstance(raw, list):
-            kwargs[f.name] = tuple(_construct(Mode, m) for m in raw)
-        elif f.name.startswith("snr_") or f.name == "m_scan":
-            kwargs[f.name] = tuple(raw)
-        elif raw is None:
+        if raw is None:
             continue
+        if f.name == "modes" and isinstance(raw, list):
+            kwargs[f.name] = tuple(_construct(Mode, dict(m) if isinstance(m, dict) else m)
+                                   for m in raw)
+        elif f.name in nested and isinstance(raw, dict):
+            kwargs[f.name] = _construct(nested[f.name], raw)
+        elif isinstance(raw, (list, tuple)):
+            kwargs[f.name] = tuple(raw)
         else:
             kwargs[f.name] = raw
     return cls(**kwargs)

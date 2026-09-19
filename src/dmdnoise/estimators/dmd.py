@@ -74,4 +74,5 @@ class DMD:
             near_nyquist=check_nyquist(freqs, dt),
             extra={"method": "dmd"},
         )
-        return EstimateResult(freqs=freqs, eigenvalues=evals, modes=modes, diagnostics=diag)
+        return EstimateResult(freqs=freqs, eigenvalues=evals, modes=modes,
+                              diagnostics=diag, operator=A)

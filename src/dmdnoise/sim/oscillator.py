@@ -91,12 +91,18 @@ def _real_blocks(mu: NDArray) -> list[NDArray]:
 
 
 def _krylov(block: NDArray, z0: NDArray, steps: int) -> NDArray:
-    """[z0, B z0, ..., B^steps z0]，形状 (2, steps+1)。"""
-    out = np.empty((2, steps + 1), dtype=float)
-    out[:, 0] = z0
-    for j in range(steps):
-        out[:, j + 1] = block @ out[:, j]
-    return out
+    """[z0, B z0, ..., B^steps z0]，形状 (2, steps+1)。
+
+    闭式：B = rho * R(phi)，故 B^j = rho^j R(j*phi)，可对 j 向量化。
+    """
+    rho = math.sqrt(block[0, 0] ** 2 + block[1, 0] ** 2)
+    phi = math.atan2(block[0, 1], block[0, 0])
+    j = np.arange(steps + 1)
+    env = rho**j
+    c = env * np.cos(phi * j)
+    s = env * np.sin(phi * j)
+    perp = np.array([z0[1], -z0[0]], dtype=float)
+    return np.outer(z0, c) + np.outer(perp, s)
 
 
 def _rot(theta: float) -> NDArray:
@@ -117,29 +123,26 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int) -> System:
 
     C = rng.standard_normal((oc.n, dim))
 
-    # --- C6 平衡：令各模态可观测能量相等 ---
-    # 用单位初始块 (1,0) 计算单位响应能量 g_k，再取缩放 t_k = G/g_k
-    scaling = np.empty(n_modes)
-    for k, blk in enumerate(blocks):
-        kry = _krylov(blk, np.array([1.0, 0.0]), m)
-        g = np.linalg.norm(C[:, 2 * k : 2 * k + 2] @ kry)
-        if g <= 0.0 or not np.isfinite(g):
-            raise SimulatorError(f"模态 {k} 不可观测（能量 {g}）")
-        scaling[k] = 1.0 / g
-
-    # --- 固定模 + 每次实现随机相位（保持 C6 平衡不被破坏） ---
-    # 2x2 旋转与 B_k 可交换，故相位随机化不改变可观测能量
+    # --- 相位随机化 + C6 平衡（按实现精确配平） ---
+    # 注意：2x2 旋转与 B_k 可交换，故 R(theta) 作用在初状态上等价于相位平移。
+    # 但可观测能量 E_k = ||C_blk @ kry(blk, z0_blk)|| 依赖 C_blk 与 z0_blk 的耦合，
+    # **并非**旋转不变（C_blk 是固定的一般矩阵）。因此必须在每个实现内、
+    # 按实际使用的 z0 方向重新标定缩放，才能保证平衡是精确的。
     z0 = np.empty(dim)
     for k, blk in enumerate(blocks):
         th = rng.uniform(0.0, 2.0 * math.pi)
-        z0[2 * k : 2 * k + 2] = scaling[k] * (_rot(th) @ np.array([1.0, 0.0]))
+        u = _rot(th) @ np.array([1.0, 0.0])
+        g = np.linalg.norm(C[:, 2 * k : 2 * k + 2] @ _krylov(blk, u, m))
+        if g <= 0.0 or not np.isfinite(g):
+            raise SimulatorError(f"模态 {k} 不可观测（能量 {g}）")
+        z0[2 * k : 2 * k + 2] = u / g
 
-    # --- 轨迹 ---
+    # --- 轨迹（闭式向量化） ---
     Zs = np.empty((dim, m + 1))
-    Zs[:, 0] = z0
-    for j in range(m):
-        for k, blk in enumerate(blocks):
-            Zs[2 * k : 2 * k + 2, j + 1] = blk @ Zs[2 * k : 2 * k + 2, j]
+    for k, blk in enumerate(blocks):
+        Zs[2 * k : 2 * k + 2, :] = _krylov(
+            blk, z0[2 * k : 2 * k + 2], m
+        )
     X = C @ Zs[:, :m]
     Y = C @ Zs[:, 1 : m + 1]
 

@@ -97,4 +97,5 @@ class TDMD:
                 "z_sv_min_ratio": float(Sz[r - 1] / Sz[0]),
             },
         )
-        return EstimateResult(freqs=freqs, eigenvalues=evals, modes=modes, diagnostics=diag)
+        return EstimateResult(freqs=freqs, eigenvalues=evals, modes=modes,
+                              diagnostics=diag, operator=A)

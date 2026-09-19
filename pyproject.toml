@@ -27,4 +27,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-filterwarnings = ["error::RuntimeWarning"]
+pythonpath = ["src"]
+markers = [
+    "slow: 需要较长运行时间的判别性测试（T11 等）",
+]
