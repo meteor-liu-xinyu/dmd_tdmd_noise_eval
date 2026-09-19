@@ -95,6 +95,7 @@ TDMD（Total DMD）是标准 DMD 的抗噪改进版，理论上能纠正这种�
 | [`docs/algorithm-spec.md`](docs/algorithm-spec.md) | 算法与统计规格：符号约定、仿真器、SNR 定义、DMD/TDMD 精确算法、指标与置信区间定义、蒙特卡洛协议、秩估计器规格、单元测试判据、基线预验证 |
 | [`docs/experiment-protocol.md`](docs/experiment-protocol.md) | 三组实验的参数网格、输出物、判定准则、图表清单与运行矩阵 |
 | [`docs/exp1-results.md`](docs/exp1-results.md) | **实验一结果**：通道数/SNR/幅度比/时延嵌入四轴扫描，四类区域决策表 |
+| [`docs/exp2-exp3-results.md`](docs/exp2-exp3-results.md) | **实验二、三结果**：样本量扫描的斜率与假设判定；秩判据对噪声估计的敏感性 |
 
 ### 6.1 工作量速览
 
@@ -154,8 +155,9 @@ dmd_tdmd_noise_eval/
 - [x] **测试** — 56 项全部通过（含 3 项 T11 判别性测试）
 - [x] **G3 验收门闭合** — 投影子空间判别问题已解决，T11 已标定
 - [x] **可行性标定** — 已实测确定各 SNR 档位的分辨所需 `J`，并据此修订实验设计
-- [x] **M5 实验一执行完成** — 29 个切片 / 116 行明细，见 [`docs/exp1-results.md`](docs/exp1-results.md)
-- [ ] 实验二、实验三执行
+- [x] **M5 实验一执行完成** — 29 个切片 / 116 行，见 [`docs/exp1-results.md`](docs/exp1-results.md)
+- [x] **M6 实验二执行完成** — `m ∈ {50…500}` 斜率与 H5/H6 判定
+- [x] **M7 实验三执行完成** — 三个秩判据对 σ̂ 的敏感性，鲁棒区间
 - [ ] 图表生成（`report/figures.py`，fig1–fig10）
 - [ ] M8 汇总与结果报告
 

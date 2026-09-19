@@ -1,8 +1,10 @@
 """实验运行入口。
 
 用法：
-    python scripts/run_experiment.py --exp exp1 --smoke
-    python scripts/run_experiment.py --exp exp1
+    python scripts/run_experiment.py --exp exp1 [--smoke]
+    python scripts/run_experiment.py --exp exp2 [--smoke]
+    python scripts/run_experiment.py --exp exp3 [--smoke]
+    python scripts/run_experiment.py --exp all   [--smoke]
 
 ⚠️ 必须在 import numpy 之前锁定 BLAS 线程数（见 ADR-010 与 algorithm-spec §12.1）。
 """
@@ -36,7 +38,10 @@ from dmdnoise.experiments import (  # noqa: E402
     Slice,
     annotate_reportable,
     headline,
+    judge_exp2,
     run_exp1,
+    run_exp2,
+    run_exp3,
 )
 
 LOG = logging.getLogger("run_experiment")
@@ -56,60 +61,114 @@ def make_progress(tag: str):
     return cb
 
 
-def run_exp1_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
-    if smoke:
-        slices = list(SMOKE_SLICES)
-        j, m = 400, 200
-        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
-        n_slices = len(slices)
-    else:
-        slices = None
-        j, m = cfg.grid.j_main, 200
-        n_slices = len(__import__("dmdnoise.experiments", fromlist=["x"]).default_slices(cfg))
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
+
+# --------------------------------------------------------------------------- exp1
+def run_exp1_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
+    from dmdnoise.experiments import default_slices
+
+    if smoke:
+        slices, j, m = list(SMOKE_SLICES), 400, 200
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    else:
+        slices, j, m = None, cfg.grid.j_main, 200
+
+    n_slices = len(slices) if slices is not None else len(default_slices(cfg))
     LOG.info("实验一：%d 个切片，J=%d，m=%d", n_slices, j, m)
 
-    res = run_exp1(cfg, slices=slices, m=m, j_total=j,
-                   progress=make_progress("exp1"))
-
-    out.mkdir(parents=True, exist_ok=True)
+    res = run_exp1(cfg, slices=slices, m=m, j_total=j, progress=make_progress("exp1"))
     suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
     res.rows.to_csv(out / f"exp1_bias_variance{suffix}.csv", index=False, encoding="utf-8")
     res.paired.to_csv(out / f"exp1_paired{suffix}.csv", index=False, encoding="utf-8")
-    annotate_reportable(res).to_csv(out / f"exp1_reportable{suffix}.csv",
-                                    index=False, encoding="utf-8")
+    annotate_reportable(res).to_csv(out / f"exp1_reportable{suffix}.csv", index=False,
+                                    encoding="utf-8")
     headline(res).to_csv(out / f"exp1_headline{suffix}.csv", index=False, encoding="utf-8")
-
-    meta = {"experiment": "exp1", "smoke": smoke, "fingerprint": res.fingerprint, **res.meta}
-    (out / f"exp1_meta{suffix}.json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    LOG.info("已写出 exp1_*.csv（%d 行明细）", len(res.rows))
-    print_summary(res)
+    write_json(out / f"exp1_meta{suffix}.json",
+               {"experiment": "exp1", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp1_*.csv（%d 行）", len(res.rows))
+    print_summary_exp1(res)
     return 0
 
 
-def print_summary(res) -> None:
+def print_summary_exp1(res) -> None:
     df = headline(res)
     if df.empty:
         LOG.warning("结果为空")
         return
-    print("\n=== 各网格点汇总（相对偏差）===", file=sys.stdout)
+    print("\n=== 实验一 · 各网格点汇总（相对偏差）===", file=sys.stdout)
     print(df.to_string(index=False), file=sys.stdout)
-
-    pr = res.paired
-    if pr is not None and not pr.empty:
-        std = pr[pr["stat"] == "std"]
+    if res.paired is not None and not res.paired.empty:
+        std = res.paired[res.paired["stat"] == "std"]
         if not std.empty:
-            print("\n=== 方差代价（std_TDMD / std_DMD，配对 bootstrap）===", file=sys.stdout)
+            print("\n=== 实验一 · 方差代价（std_TDMD / std_DMD）===", file=sys.stdout)
             cols = ["channel", "axis", "snr_db", "n_axis", "amp_ratio", "mode",
                     "ratio", "ci_lo", "ci_hi", "paired_effective"]
             print(std[cols].to_string(index=False), file=sys.stdout)
 
 
+# --------------------------------------------------------------------------- exp2
+def run_exp2_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
+    if smoke:
+        j, kw = 400, {"m_values": (50, 200, 500)}
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    else:
+        j, kw = 10000, {}
+
+    res = run_exp2(cfg, j_total=j, progress=make_progress("exp2"), **kw)
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    res.table.to_csv(out / f"exp2_sample_scan{suffix}.csv", index=False, encoding="utf-8")
+    res.slopes.to_csv(out / f"exp2_slopes{suffix}.csv", index=False, encoding="utf-8")
+    judge_exp2(res).to_csv(out / f"exp2_judgement{suffix}.csv", index=False,
+                           encoding="utf-8")
+    write_json(out / f"exp2_meta{suffix}.json",
+               {"experiment": "exp2", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp2_*.csv（%d 行明细）", len(res.table))
+    print("\n=== 实验二 · 斜率与判定 ===", file=sys.stdout)
+    print(judge_exp2(res).to_string(index=False), file=sys.stdout)
+    return 0
+
+
+# --------------------------------------------------------------------------- exp3
+def run_exp3_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
+    if smoke:
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    res = run_exp3(cfg, j_total=300 if smoke else 2000,
+                   progress=make_progress("exp3"))
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    res.table.to_csv(out / f"exp3_rank_sensitivity{suffix}.csv", index=False,
+                     encoding="utf-8")
+    res.rank_table.to_csv(out / f"exp3_rank_mismatch{suffix}.csv", index=False,
+                          encoding="utf-8")
+    res.robust.to_csv(out / f"exp3_robust{suffix}.csv", index=False, encoding="utf-8")
+    res.adaptive.to_csv(out / f"exp3_adaptive_sigma{suffix}.csv", index=False,
+                        encoding="utf-8")
+    write_json(out / f"exp3_meta{suffix}.json",
+               {"experiment": "exp3", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp3_*.csv（%d 行明细）", len(res.table))
+    print("\n=== 实验三 · 秩误判率（k = sigma_hat / sigma_true）===", file=sys.stdout)
+    print(res.rank_table.to_string(index=False), file=sys.stdout)
+    print("\n=== 实验三 · 鲁棒区间 ===", file=sys.stdout)
+    print(res.robust.to_string(index=False), file=sys.stdout)
+    print("\n=== 实验三 · 数据驱动 sigma_hat 表现 ===", file=sys.stdout)
+    print(res.adaptive.to_string(index=False), file=sys.stdout)
+    return 0
+
+
+RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
-    ap.add_argument("--exp", default="exp1", choices=["exp1"])
+    ap.add_argument("--exp", default="exp1", choices=["exp1", "exp2", "exp3", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
     ap.add_argument("--smoke", action="store_true", help="小规模冒烟运行")
@@ -129,16 +188,19 @@ def main(argv: list[str] | None = None) -> int:
         results = validate(cfg)
 
     out = Path(args.out) if args.out else ROOT / cfg.run.out_dir / "tables"
-
     LOG.info("配置指纹 %s", config_fingerprint(cfg))
     LOG.info("约束：通过=%s，警戒=%s",
              all(r.passed for r in results), [r.name for r in results if r.warning])
     LOG.info("BLAS 线程 OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
     save_fingerprint(cfg, results, out / "config_meta.json")
 
-    t0 = time.perf_counter()
-    rc = run_exp1_cli(cfg, out, smoke=args.smoke)
-    LOG.info("总耗时 %.1f s", time.perf_counter() - t0)
+    targets = ["exp1", "exp2", "exp3"] if args.exp == "all" else [args.exp]
+    rc = 0
+    for name in targets:
+        t0 = time.perf_counter()
+        LOG.info("===== 开始 %s =====", name)
+        rc |= RUNNERS[name](cfg, out, smoke=args.smoke)
+        LOG.info("===== %s 完成，耗时 %.1f s =====", name, time.perf_counter() - t0)
     return rc
 
 
