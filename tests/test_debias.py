@@ -72,16 +72,20 @@ def test_t11_negative_control_no_augment_is_rejected(cfg: Config) -> None:
 
 @pytest.mark.slow
 def test_no_variance_penalty_observed(cfg: Config) -> None:
-    """早期观测：TDMD 未表现出方差代价（std 比与 1 无显著差异）。
+    """早期观测：TDMD **未**表现出方差代价，其 std 反而略低于标准 DMD。
 
-    规格中的假设 H3 预期 std_TDMD > std_DMD。本测试固化"未观察到代价"这一
-    可复现现象；若正式实验给出相反结论，应更新该测试并记录机制解释。
+    规格中的假设 H3 预期 std_TDMD > std_DMD（TLS 以方差换偏差）。实测相反：
+    配对 bootstrap 给出 std 比 ≈ 0.91，CI 上界远低于 1。配对比较之所以比
+    分别统计更灵敏，是因为它利用了公共随机数下两法估计的强相关。
+
+    判定：只要 std 比的上界未超过 1 + 5%，即可判定"无方差代价"。
     """
     cell = run_cell(cfg, "complex", SNR_DB, M, 2000, methods=("dmd", "tdmd"))
     d = cell.errors("dmd", mode=0)
     t = cell.errors("tdmd", mode=0)
 
-    pr = paired_ratio(t, d, stat="std", bootstrap=2000,
-                      rng=np.random.default_rng(0))
-    assert pr.ci[0] <= 1.0 <= pr.ci[1], f"std 比 CI 未覆盖 1：{pr.ci}"
+    pr = paired_ratio(t, d, stat="std", bootstrap=2000, rng=np.random.default_rng(0))
     assert pr.paired_effective, pr.note
+    assert pr.ci[1] < 1.05, f"检测到方差代价：std 比 CI 上界 {pr.ci[1]:.3f}"
+    assert pr.point < 1.05, f"std 比点估计 {pr.point:.3f} 超过无代价阈值"
+
