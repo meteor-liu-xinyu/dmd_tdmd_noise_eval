@@ -17,11 +17,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
+
+LOG_RANK = logging.getLogger(__name__)
 
 VALID_METHODS = ("energy", "marchenko_pastur", "gavish_donoho")
 
@@ -151,20 +154,45 @@ def tensor_sigma(Z) -> float:
 
 
 def adaptive_sigma(Z: NDArray, *, method: str = "gavish_donoho",
-                   max_iter: int = 10) -> tuple[float, int]:
-    """交替迭代：`σ̂ ← ` 残差 → `r̂ ← R(σ̂)` → 截断 → 残差，直至秩稳定。
+                   max_iter: int = 10, return_status: bool = False,
+                   sv: NDArray | None = None):
+    """交替迭代：残差 -> sigma_hat -> 秩 -> 截断 -> 残差，直至秩稳定。
 
-    对应"噪声水平完全未知"的场景（实验三最贴近实际应用的配置）。
-    返回 (σ̂, r̂)。
+    对应“噪声水平完全未知”的场景（实验六最贴近实际应用的配置）。
+
+    !! 该迭代会收敛到「虚假不动点」——这是本项目最需要警惕的失效模式。!!
+
+    `sigma_hat` 依赖型判据（energy / marchenko_pastur）在此反馈回路中存在
+    **自洽但错误**的解：`sigma_hat` 偏低 -> 阈值偏低 -> 秩高估 -> 残差偏小 ->
+    `sigma_hat` 更低 -> …… 直到把噪声方向全部纳入。此时迭代**收敛**
+    （秩稳定、`sigma_hat` 稳定），但两者都远离真值，且**无法从迭代本身察觉**。
+
+    实测（复值 n=8、SNR=10 dB、m=200、J=200，真值 r=2）：
+
+        gavish_donoho     收敛率 1.000   sigma_hat/sigma_true = 0.930   r_hat 众数 2   -> 正确
+        marchenko_pastur  收敛率 1.000   sigma_hat/sigma_true = 0.158   r_hat 众数 16  -> 秩高估到上界
+        energy            收敛率 1.000   sigma_hat/sigma_true = 2.584   r_hat 众数 1   -> 秩低估
+
+    即 **“迭代收敛”不能作为可用性的证据**。gavish_donoho 的阈值
+    `tau = omega(beta) * median(s)` 不依赖 `sigma_hat`，故不存在这条回路——
+    这是它在端到端评估中零退化的根本原因（见 docs/final-report.md 2.8）。
+
+    返回 `(sigma_hat, r_hat)`；`return_status=True` 时额外返回是否在 max_iter 内稳定。
+    **注意**：`converged=True` 只说明迭代稳定，**不说明结果正确**。
     """
+
     Z = np.asarray(Z)
     m, n = Z.shape
-    sv = np.linalg.svd(Z, compute_uv=False)
+    if sv is None:                       # 允许调用方复用已算好的奇异值谱
+        sv = np.linalg.svd(Z, compute_uv=False)
+    else:
+        sv = np.asarray(sv, dtype=float)
     if sv[0] <= 0:
         raise RankError("Z 的首奇异值非正")
 
     sigma_hat = residual_sigma(float(np.linalg.norm(Z)), m, n)   # 初始：全能量
     rank = 1
+    converged = False
     for _ in range(max_iter):
         est = estimate_rank(sv, sigma_hat=sigma_hat, m=m, n=n, method=method)
         rank_new = max(int(est.rank), 1)
@@ -174,6 +202,13 @@ def adaptive_sigma(Z: NDArray, *, method: str = "gavish_donoho",
         sigma_new = residual_sigma(resid, m, n)
         if rank_new == rank:
             sigma_hat = 0.5 * (sigma_hat + sigma_new)
+            converged = True
             break
         rank, sigma_hat = rank_new, sigma_new
-    return sigma_hat, rank
+    if not converged:
+        LOG_RANK.warning(
+            "adaptive_sigma 未在 %d 次内收敛（method=%s，末态 r̂=%d、σ̂=%.4g）；"
+            "注意：即使收敛也可能落在虚假不动点上",
+            max_iter, method, rank, sigma_hat,
+        )
+    return (sigma_hat, rank, converged) if return_status else (sigma_hat, rank)

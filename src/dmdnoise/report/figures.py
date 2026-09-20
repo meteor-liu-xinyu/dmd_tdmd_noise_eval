@@ -535,11 +535,79 @@ def fig12_crossover(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig12_crossover")
 
 
+
+# --------------------------------------------------------------------------- fig13
+def fig13_end_to_end(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig13 端到端：噪声水平未知下的 sigma_hat、秩判定与频率精度退化（实验六）。"""
+    rk = t.get("exp6_rank_stats")
+    cmp_ = t.get("exp6_comparison")
+    if rk is None:
+        return None
+    rk = rk[rk["strategy"] != "oracle"]
+    if rk.empty:
+        return None
+    rk = rk.copy()
+    rk["tag"] = (rk["channel"] + " | SNR" + rk["snr_db"].astype(str))
+    tags = sorted(rk["tag"].unique())
+    strategies = sorted(rk["strategy"].unique())
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
+    cmap = plt.get_cmap("Set2")
+
+    # (1) sigma_hat / sigma_true
+    w = 0.8 / len(strategies)
+    for i, st in enumerate(strategies):
+        g = rk[rk["strategy"] == st].set_index("tag").reindex(tags)
+        axes[0].bar(np.arange(len(tags)) + i * w, g["sigma_hat_over_true"], width=w,
+                    color=cmap(i), label=st)
+    axes[0].axhline(1.0, color="k", ls="--", lw=1.2)
+    axes[0].set_yscale("log")
+    axes[0].set_ylabel("sigma_hat / sigma_true")
+    axes[0].set_title("噪声水平估计")
+    axes[0].text(0.02, 1.05, "真值 1.0", fontsize=8, transform=axes[0].get_yaxis_transform())
+
+    # (2) 秩判对率：按策略分组（聚合会把三个策略混在一起，信息被稀释）
+    for i, st in enumerate(strategies):
+        g = rk[rk["strategy"] == st].set_index("tag").reindex(tags)
+        axes[1].bar(np.arange(len(tags)) + i * w, g["p_exact"], width=w,
+                    color=cmap(i), label=st)
+    axes[1].set_xticks(np.arange(len(tags)) + w)
+    axes[1].set_xticklabels(tags, fontsize=7, rotation=20, ha="right")
+    axes[1].set_ylim(0, 1.08)
+    axes[1].set_ylabel("秩判对率 P(r_hat = r_true)")
+    axes[1].set_title("秩判定正确率（按策略）")
+    axes[1].legend(fontsize=7, ncol=1, loc="upper right")
+
+    # 
+    # (3) 端到端 MSE 比 vs oracle
+    if cmp_ is not None and not cmp_.empty:
+        c = cmp_[cmp_["method"] == "tdmd"].copy()
+        c["tag"] = c["channel"] + " SNR" + c["snr_db"].astype(str) + " m" + c["mode"].astype(str)
+        c = c[np.isfinite(c["mse_ratio"])].sort_values("mse_ratio")
+        y = np.arange(len(c))
+        ok = c["退化显著"].eq(True)
+        axes[2].errorbar(c.loc[~ok, "mse_ratio"], y[~ok.values],
+                         xerr=[c.loc[~ok, "mse_ratio"] - c.loc[~ok, "mse_lo"],
+                               c.loc[~ok, "mse_hi"] - c.loc[~ok, "mse_ratio"]],
+                         fmt="o", color="#2471a3", capsize=3, ms=4, label="退化不显著")
+        axes[2].errorbar(c.loc[ok, "mse_ratio"], y[ok.values],
+                         xerr=[c.loc[ok, "mse_ratio"] - c.loc[ok, "mse_lo"],
+                               c.loc[ok, "mse_hi"] - c.loc[ok, "mse_ratio"]],
+                         fmt="o", color="#c0392b", capsize=3, ms=4, label="退化显著")
+        axes[2].axvline(1.0, color="k", ls="--", lw=1.2)
+        axes[2].set_yticks(y)
+        axes[2].set_yticklabels(c["tag"] + " / " + c["strategy"], fontsize=6)
+        axes[2].set_xlabel("MSE(数据驱动秩) / MSE(oracle 秩)")
+        axes[2].set_title("端到端精度退化（TDMD）")
+        axes[2].legend(fontsize=8, loc="lower right")
+    fig.suptitle("图 13  端到端评估：噪声水平未知下的完整链路（gavish_donoho 零退化）")
+    return _save(fig, d, "fig13_end_to_end")
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
            fig8_slopes, fig9_rank_robustness, fig10_decision_map,
-           fig11_robustness, fig12_crossover)
+           fig11_robustness, fig12_crossover, fig13_end_to_end)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -552,6 +620,8 @@ _FILES = {
     "exp4_verdict": "exp4_verdict.csv",
     "exp5_crossover": "exp5_crossover.csv",
     "exp5_crossing": "exp5_crossing.csv",
+    "exp6_rank_stats": "exp6_rank_stats.csv",
+    "exp6_comparison": "exp6_comparison.csv",
     "exp3_robust": "exp3_robust.csv",
 }
 

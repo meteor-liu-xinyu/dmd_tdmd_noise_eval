@@ -46,8 +46,10 @@ from dmdnoise.experiments import (  # noqa: E402
 from dmdnoise.experiments import (  # noqa: E402
     run_exp4,
     run_exp5,
+    run_exp6,
     summary_exp5,
     verdict_exp4,
+    verdict_exp6,
 )
 from dmdnoise.report import make_all as make_figures  # noqa: E402
 
@@ -254,6 +256,36 @@ def run_exp5_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     return 0
 
 
+def run_exp6_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
+    """实验六：端到端评估（噪声水平未知 -> 秩估计 -> 频率估计）。"""
+    j = 300 if smoke else 2000
+    if smoke:
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    res = run_exp6(cfg, j_total=j, progress=make_progress("exp6"))
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    for name, df in (("exp6_rank_stats", res.ranks),
+                     ("exp6_table", res.table),
+                     ("exp6_comparison", res.comparison),
+                     ("exp6_verdict", verdict_exp6(res))):
+        df.to_csv(out / (name + suffix + ".csv"), index=False, encoding="utf-8")
+    write_json(out / ("exp6_meta" + suffix + ".json"),
+               {"experiment": "exp6", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp6_*.csv（%d 行明细）", len(res.table))
+    print()
+    print("=== 实验六 · 端到端裁决 ===")
+    print(verdict_exp6(res).to_string(index=False))
+    print()
+    print("=== 实验六 · 数据驱动秩 vs oracle 秩（配对 bootstrap）===")
+    if not res.comparison.empty:
+        c = res.comparison[res.comparison["method"] == "tdmd"]
+        cols = ["channel", "snr_db", "mode", "strategy", "mse_ratio",
+                "mse_lo", "mse_hi", "退化显著"]
+        print(c[cols].to_string(index=False))
+    return 0
+
+
 def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     """由 results/tables 下的 CSV 生成 fig1-fig10。只读 CSV，不重跑实验。"""
     fig_dir = ROOT / cfg.run.out_dir / "figures"
@@ -269,13 +301,14 @@ def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
 
 
 RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli,
-           "exp4": run_exp4_cli, "exp5": run_exp5_cli, "figures": run_figures_cli}
+           "exp4": run_exp4_cli, "exp5": run_exp5_cli, "exp6": run_exp6_cli,
+           "figures": run_figures_cli}
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
     ap.add_argument("--exp", default="exp1",
-                    choices=["exp1", "exp2", "exp3", "exp4", "exp5",
+                    choices=["exp1", "exp2", "exp3", "exp4", "exp5", "exp6",
                              "figures", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
@@ -304,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     LOG.info("BLAS 线程 OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
     save_fingerprint(cfg, results, out / "config_meta.json")
 
-    targets = (["exp1", "exp2", "exp3", "exp4", "exp5", "figures"]
+    targets = (["exp1", "exp2", "exp3", "exp4", "exp5", "exp6", "figures"]
                if args.exp == "all"
                else [args.exp])
     rc = 0
