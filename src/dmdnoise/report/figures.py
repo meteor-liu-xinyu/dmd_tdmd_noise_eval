@@ -493,11 +493,53 @@ def fig11_robustness(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig11_robustness")
 
 
+
+# --------------------------------------------------------------------------- fig12
+def fig12_crossover(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig12 降偏比 rho 随模态间隔的变化与交叉点（实验五）。"""
+    df = t.get("exp5_crossover")
+    if df is None:
+        return None
+    cr = t.get("exp5_crossing")
+    modes = sorted(df["mode"].unique())
+    combos = sorted({(r["channel"], int(r["n"])) for _, r in df.iterrows()})
+    fig, axes = plt.subplots(1, len(modes), figsize=(5.6 * len(modes), 4.4),
+                             sharey=True)
+    axes = np.atleast_1d(axes)
+    cmap = plt.get_cmap("tab10")
+    for ax, mode in zip(axes, modes):
+        for i, (ch, n) in enumerate(combos):
+            g = df[(df["channel"] == ch) & (df["n"] == n) & (df["mode"] == mode)]
+            g = g[(g["pair_fail_rate"] <= 0.20) & g["dmd_resolvable"]]
+            if g.empty:
+                continue
+            g = g.sort_values("f2_over_f1")
+            col = cmap(i % 10)
+            x = g["f2_over_f1"].to_numpy(float)
+            ax.plot(x, g["rho"], marker="o", ms=4, color=col, label=f"{ch} n={n}")
+            ax.fill_between(x, g["rho_lo"], g["rho_hi"], color=col, alpha=0.15)
+        if cr is not None and not cr.empty:
+            cm = cr[(cr["mode"] == mode) & np.isfinite(cr["crossing"])]
+            for _, r in cm.iterrows():
+                ax.axvline(r["crossing"], color="k", ls=":", lw=1.0, alpha=0.6)
+        ax.axhline(1.0, color="k", ls="--", lw=1.4)
+        ax.set_yscale("log")
+        ax.set_xlabel("模态频率间隔 $f_2/f_1$")
+        ax.set_title(f"模态 {mode}")
+        ax.legend(fontsize=7, loc="upper left")
+    axes[0].set_ylabel("降偏比 rho = |bias_TDMD| / |bias_DMD|")
+    axes[0].annotate("rho=1：两法偏差相等", xy=(0.98, 1.0),
+                 xycoords=("axes fraction", "data"), ha="right", va="bottom",
+                 fontsize=8, color="k")
+    fig.suptitle("图 12  降偏比随模态间隔的变化与交叉点（阴影为配对 bootstrap 95% CI）")
+    return _save(fig, d, "fig12_crossover")
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
            fig8_slopes, fig9_rank_robustness, fig10_decision_map,
-           fig11_robustness)
+           fig11_robustness, fig12_crossover)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -508,6 +550,8 @@ _FILES = {
     "exp2_slopes_per_m": "exp2_slopes_per_m.csv",
     "exp3_rank": "exp3_rank_mismatch.csv",
     "exp4_verdict": "exp4_verdict.csv",
+    "exp5_crossover": "exp5_crossover.csv",
+    "exp5_crossing": "exp5_crossing.csv",
     "exp3_robust": "exp3_robust.csv",
 }
 

@@ -21,6 +21,12 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp5_crossover import (
+    COMBOS,
+    Exp5Result,
+    run as run_exp5,
+    summary as summary_exp5,
+)
 from dmdnoise.experiments.exp4_robustness import (
     SEPARATIONS,
     WINDOW_DECAYS,
@@ -36,7 +42,11 @@ M_DEFAULT = 200
 METHODS = ("dmd", "tdmd")
 
 __all__ = [
+    "COMBOS",
     "EXP2_SNR_DB",
+    "Exp5Result",
+    "run_exp5",
+    "summary_exp5",
     "SEPARATIONS",
     "WINDOW_DECAYS",
     "Exp4Result",
