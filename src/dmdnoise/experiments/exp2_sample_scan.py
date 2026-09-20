@@ -147,6 +147,7 @@ def _bias_slope_ci(cells: dict[int, CellResult], method: str, mode: int,
 def run(cfg: Config, *, channels: Sequence[str] = ("complex", "real"),
         snr_db: float = SNR_DB, m_values: Sequence[int] = M_VALUES,
         j_total: int = J_DEFAULT, samples: dict[str, int] | None = None,
+        snr_normalization: str = "m_max",
         progress: Any = None) -> Exp2Result:
     """运行实验二：样本量扫描。
 
@@ -165,7 +166,8 @@ def run(cfg: Config, *, channels: Sequence[str] = ("complex", "real"),
         LOG.info("实验二 [%s] n=%d SNR=%g m=%s J=%d", channel, n, snr_db,
                  list(m_values), j_total)
         cells = run_m_scan(sub, channel, snr_db, m_values, j_total,
-                           methods=METHODS, progress=progress)
+                           methods=METHODS, snr_normalization=snr_normalization,
+                           progress=progress)
         rows.extend(_table_rows(cells, channel))
 
         for method in METHODS:
@@ -176,6 +178,7 @@ def run(cfg: Config, *, channels: Sequence[str] = ("complex", "real"),
                 slope_rows.append({
                     "channel": channel,
                     "n": n,
+                    "snr_normalization": snr_normalization,
                     "method": method,
                     "mode": mode + 1,
                     "n_realizations_used": int(sl.size),
@@ -193,7 +196,7 @@ def run(cfg: Config, *, channels: Sequence[str] = ("complex", "real"),
         slopes=pd.DataFrame(slope_rows),
         fingerprint=config_fingerprint(cfg),
         meta={"snr_db": snr_db, "m_values": list(m_values), "j_total": j_total,
-              "samples": samples},
+              "samples": samples, "snr_normalization": snr_normalization},
     )
 
 
@@ -212,4 +215,40 @@ def judge(res: Exp2Result) -> pd.DataFrame:
             "rmse_slope_ci": f"[{r['rmse_slope_lo']:.3f}, {r['rmse_slope_hi']:.3f}]",
             "H6_按m^-1/2下降": "成立" if covers_half else "不成立",
         })
+    return pd.DataFrame(out)
+
+
+def compare_normalizations(m_max: Exp2Result, per_m: Exp2Result) -> pd.DataFrame:
+    """对比两种 SNR 归一化口径下的斜率。
+
+    这是分离"m 效应"与"有效 SNR 效应"的关键对照：
+
+      `m_max` 口径 —— 跨 m 共用同一个 sigma，大 m 的有效 SNR 更低（衰减所致）
+      `per_m` 口径 —— 每个 m 的聚合 SNR 都等于目标值，只有 m 在变
+
+    若某个斜率在两种口径下**同号同量级**，则该结论是 m 的固有性质；
+    若只出现在 `m_max` 口径下、在 `per_m` 下消失或反号，则原结论是
+    **测试床衰减造成的假象**。
+    """
+    if m_max.slopes.empty or per_m.slopes.empty:
+        return pd.DataFrame()
+    keys = ["channel", "method", "mode"]
+    a = m_max.slopes.set_index(keys)
+    b = per_m.slopes.set_index(keys)
+    out: list[dict[str, Any]] = []
+    for k in a.index.intersection(b.index):
+        ra, rb = a.loc[k], b.loc[k]
+        for stat in ("bias_slope", "rmse_slope"):
+            va, vb = float(ra[stat]), float(rb[stat])
+            sign_same = (va > 0) == (vb > 0)
+            out.append({
+                "channel": k[0], "method": k[1], "mode": k[2], "stat": stat,
+                "m_max口径": va,
+                "per_m口径": vb,
+                "差值": vb - va,
+                "同号": bool(sign_same),
+                "判定": ("m 的固有性质" if sign_same and abs(vb) > 0.5 * abs(va)
+                        else "疑似测试床衰减造成的假象" if not sign_same
+                        else "口径敏感，需扩大 J 复核"),
+            })
     return pd.DataFrame(out)

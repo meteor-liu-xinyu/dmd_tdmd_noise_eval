@@ -104,3 +104,47 @@ def test_pair_failure_rate_is_reported(cfg: Config) -> None:
         rate = 1.0 - cell.pair_ok[method].mean()
         assert 0.0 <= rate <= 1.0
     assert "pair_fail" in cell.meta
+
+
+def test_snr_normalization_conventions(cfg: Config) -> None:
+    """两种 SNR 归一化口径必须行为不同且各自自洽。
+
+    `m_max`：跨 m 共用同一 sigma，大 m 的有效 SNR 更低（窗内衰减所致）；
+    `per_m`：每个 m 的聚合 SNR 都等于目标值。
+
+    这是分离"m 效应"与"有效 SNR 效应"的前提，必须可测。
+    """
+    from dmdnoise.sim import build, inject, sigma_from_snr
+
+    ms = (50, 200, 500)
+    out = {}
+    for norm in ("m_max", "per_m"):
+        out[norm] = run_m_scan(cfg, "complex", 5.0, ms, j_total=5,
+                               snr_normalization=norm)
+
+    # per_m 下各 m 的 sigma 必须不同；m_max 下必须相同
+    sig_mmax = [out["m_max"][m].meta["sigma_this_m"] for m in ms]
+    sig_perm = [out["per_m"][m].meta["sigma_this_m"] for m in ms]
+    assert len(set(round(s, 12) for s in sig_mmax)) == 1, sig_mmax
+    assert len(set(round(s, 12) for s in sig_perm)) > 1, sig_perm
+
+    # 实测聚合 SNR：per_m 应各 m 一致，m_max 应随 m 下降
+    sys_max = build(cfg, "complex", np.random.default_rng(0), max(ms))
+    got_mmax, got_perm = [], []
+    for m in ms:
+        Xn1, Yn1, _ = inject(sys_max.X, sys_max.Y, 1.0, np.random.default_rng(1),
+                             mode="trajectory")
+        for tag, sig, acc in (("m_max", sig_mmax[ms.index(m)], got_mmax),
+                              ("per_m", sig_perm[ms.index(m)], got_perm)):
+            Xs = sys_max.X[:, :m] + sig * (Xn1[:, :m] - sys_max.X[:, :m])
+            acc.append(10 * np.log10(np.linalg.norm(sys_max.X[:, :m]) ** 2
+                                     / np.linalg.norm(Xs - sys_max.X[:, :m]) ** 2))
+    # per_m：跨 m 的实测 SNR 差异应远小于 m_max
+    assert max(got_perm) - min(got_perm) < max(got_mmax) - min(got_mmax)
+    assert np.allclose(got_perm, 5.0, atol=1.5), got_perm
+
+
+def test_run_m_scan_rejects_unknown_normalization(cfg: Config) -> None:
+    with pytest.raises(ValueError):
+        run_m_scan(cfg, "complex", 5.0, (50, 100), j_total=2,
+                   snr_normalization="bogus")

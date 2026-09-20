@@ -43,6 +43,7 @@ from dmdnoise.experiments import (  # noqa: E402
     run_exp2,
     run_exp3,
 )
+from dmdnoise.report import make_all as make_figures  # noqa: E402
 
 LOG = logging.getLogger("run_experiment")
 
@@ -112,27 +113,49 @@ def print_summary_exp1(res) -> None:
 
 
 # --------------------------------------------------------------------------- exp2
-def run_exp2_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
+def run_exp2_cli(cfg: Config, out: Path, *, smoke: bool, snr_norm: str = "both") -> int:
+    """跑实验二。snr_norm="both" 时两种 SNR 归一化口径都跑并给出对比。"""
+    from dmdnoise.experiments.exp2_sample_scan import compare_normalizations
+
     if smoke:
         j, kw = 400, {"m_values": (50, 200, 500)}
         LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
     else:
         j, kw = 10000, {}
 
-    res = run_exp2(cfg, j_total=j, progress=make_progress("exp2"), **kw)
+    norms = ["m_max", "per_m"] if snr_norm == "both" else [snr_norm]
     suffix = "_smoke" if smoke else ""
     out.mkdir(parents=True, exist_ok=True)
-    res.table.to_csv(out / f"exp2_sample_scan{suffix}.csv", index=False, encoding="utf-8")
-    res.slopes.to_csv(out / f"exp2_slopes{suffix}.csv", index=False, encoding="utf-8")
-    judge_exp2(res).to_csv(out / f"exp2_judgement{suffix}.csv", index=False,
-                           encoding="utf-8")
-    write_json(out / f"exp2_meta{suffix}.json",
-               {"experiment": "exp2", "smoke": smoke,
-                "fingerprint": res.fingerprint, **res.meta})
-    LOG.info("已写出 exp2_*.csv（%d 行明细）", len(res.table))
-    print("\n=== 实验二 · 斜率与判定 ===", file=sys.stdout)
-    print(judge_exp2(res).to_string(index=False), file=sys.stdout)
+    results = {}
+    for norm in norms:
+        LOG.info("--- exp2 口径 %s ---", norm)
+        res = run_exp2(cfg, j_total=j, snr_normalization=norm,
+                       progress=make_progress("exp2[" + norm + "]"), **kw)
+        results[norm] = res
+        tag = suffix if len(norms) == 1 else "_" + norm + suffix
+        res.table.to_csv(out / ("exp2_sample_scan" + tag + ".csv"), index=False,
+                         encoding="utf-8")
+        res.slopes.to_csv(out / ("exp2_slopes" + tag + ".csv"), index=False,
+                          encoding="utf-8")
+        judge_exp2(res).to_csv(out / ("exp2_judgement" + tag + ".csv"), index=False,
+                               encoding="utf-8")
+        write_json(out / ("exp2_meta" + tag + ".json"),
+                   {"experiment": "exp2", "smoke": smoke,
+                    "fingerprint": res.fingerprint, **res.meta})
+        LOG.info("已写出 exp2_*%s.csv（%d 行明细）", tag, len(res.table))
+        print()
+        print("=== 实验二 · 斜率与判定（口径 " + norm + "）===")
+        print(judge_exp2(res).to_string(index=False))
+
+    if len(norms) == 2:
+        cmp = compare_normalizations(results["m_max"], results["per_m"])
+        cmp.to_csv(out / ("exp2_norm_compare" + suffix + ".csv"), index=False,
+                   encoding="utf-8")
+        print()
+        print("=== 实验二 · SNR 归一化口径对比（分离 m 效应与有效 SNR 效应）===")
+        print(cmp.to_string(index=False))
     return 0
+
 
 
 # --------------------------------------------------------------------------- exp3
@@ -163,15 +186,33 @@ def run_exp3_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
     return 0
 
 
-RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli}
+def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
+    """由 results/tables 下的 CSV 生成 fig1-fig10。只读 CSV，不重跑实验。"""
+    fig_dir = ROOT / cfg.run.out_dir / "figures"
+    made = make_figures(out, fig_dir)
+    if not made:
+        LOG.error("未生成任何图；请先运行 --exp exp1 / exp2 / exp3")
+        return 1
+    print()
+    print(f"已生成 {len(made)} 张图 -> {fig_dir}")
+    for p in made:
+        print("  " + p.name)
+    return 0
+
+
+RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli,
+           "figures": run_figures_cli}
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
-    ap.add_argument("--exp", default="exp1", choices=["exp1", "exp2", "exp3", "all"])
+    ap.add_argument("--exp", default="exp1",
+                    choices=["exp1", "exp2", "exp3", "figures", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
     ap.add_argument("--smoke", action="store_true", help="小规模冒烟运行")
+    ap.add_argument("--snr-norm", default="both", choices=["m_max", "per_m", "both"],
+                    help="exp2 的 SNR 归一化口径；默认两种都跑并对比")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
@@ -194,12 +235,14 @@ def main(argv: list[str] | None = None) -> int:
     LOG.info("BLAS 线程 OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
     save_fingerprint(cfg, results, out / "config_meta.json")
 
-    targets = ["exp1", "exp2", "exp3"] if args.exp == "all" else [args.exp]
+    targets = (["exp1", "exp2", "exp3", "figures"] if args.exp == "all"
+               else [args.exp])
     rc = 0
     for name in targets:
         t0 = time.perf_counter()
         LOG.info("===== 开始 %s =====", name)
-        rc |= RUNNERS[name](cfg, out, smoke=args.smoke)
+        kw = {"snr_norm": args.snr_norm} if name == "exp2" else {}
+        rc |= RUNNERS[name](cfg, out, smoke=args.smoke, **kw)
         LOG.info("===== %s 完成，耗时 %.1f s =====", name, time.perf_counter() - t0)
     return rc
 

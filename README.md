@@ -96,6 +96,7 @@ TDMD（Total DMD）是标准 DMD 的抗噪改进版，理论上能纠正这种�
 | [`docs/experiment-protocol.md`](docs/experiment-protocol.md) | 三组实验的参数网格、输出物、判定准则、图表清单与运行矩阵 |
 | [`docs/exp1-results.md`](docs/exp1-results.md) | **实验一结果**：通道数/SNR/幅度比/时延嵌入四轴扫描，四类区域决策表 |
 | [`docs/exp2-exp3-results.md`](docs/exp2-exp3-results.md) | **实验二、三结果**：样本量扫描的斜率与假设判定；秩判据对噪声估计的敏感性 |
+| [`docs/final-report.md`](docs/final-report.md) | **最终报告**：七条主要结论、假设检验汇总、适用边界决策表、认知边界 |
 
 ### 6.1 工作量速览
 
@@ -158,8 +159,10 @@ dmd_tdmd_noise_eval/
 - [x] **M5 实验一执行完成** — 29 个切片 / 116 行，见 [`docs/exp1-results.md`](docs/exp1-results.md)
 - [x] **M6 实验二执行完成** — `m ∈ {50…500}` 斜率与 H5/H6 判定
 - [x] **M7 实验三执行完成** — 三个秩判据对 σ̂ 的敏感性，鲁棒区间
-- [ ] 图表生成（`report/figures.py`，fig1–fig10）
-- [ ] M8 汇总与结果报告
+- [x] **实验二方法学修正** — 加入逐 m 归一化 SNR 对照，推翻"偏差随 m 上升"的假象
+- [x] **图表生成** — fig1–fig10（`report/figures.py`，只读 CSV）
+- [x] **M8 汇总与最终报告** — [`docs/final-report.md`](docs/final-report.md)
+- [ ] 建议的后续工作（见最终报告 §7）
 
 ### 8.1 本轮（初步验证）的关键修订
 

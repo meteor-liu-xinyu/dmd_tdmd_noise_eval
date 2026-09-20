@@ -188,13 +188,30 @@ def run_cell(cfg: Config, channel: str, snr_db: float, m: int, j_total: int,
 def run_m_scan(cfg: Config, channel: str, snr_db: float, m_values: Sequence[int],
                j_total: int, *, methods: Sequence[str] = ("dmd", "tdmd"),
                master_seed: int | None = None,
+               snr_normalization: str = "m_max",
                progress: Callable[[int, int], None] | None = None
                ) -> dict[int, CellResult]:
     """嵌套前缀设计：每次实现生成一条长序列（m_max+1 个快照），各 m 取其前缀。
 
-    这样跨 m 的估计共享同一信号与部分噪声，趋势的方差显著降低；
-    代价是引入跨 m 相关性，因此**斜率必须逐实现拟合后跨实现统计**（见 §7.3）。
+    **SNR 归一化口径**（`snr_normalization`）：
+
+    `"m_max"`（默认）
+        噪声标准差由 `m_max` 前缀一次性反解、跨全部 `m` 共用。
+        同一实现的各 `m` 面对**同一条噪声序列、同一个 σ**。
+        代价：`m` 越大，窗内信号衰减越多而 σ 不变 → **大 `m` 的有效 SNR 更低**。
+        因此"偏差随 `m` 变化"中混入了"有效 SNR 变化"的成分。
+
+    `"per_m"`
+        每个 `m` 用**该 `m` 的前缀**反解各自的 `σ_m`，使聚合 SNR 在每个 `m` 上都等于目标值。
+        噪声序列仍完全共用（先生成单位方差序列，再逐 `m` 乘 `σ_m`），
+        故嵌套结构不受破坏、公共随机数依然成立。
+        **这是分离"m 效应"与"有效 SNR 效应"的对照口径。**
+
+    两种口径的斜率差异即"有效 SNR 变化"对结论的贡献。
     """
+    if snr_normalization not in ("m_max", "per_m"):
+        raise ValueError(f"未知 SNR 归一化口径 {snr_normalization!r}")
+
     ms = sorted(int(v) for v in m_values)
     m_max = ms[-1]
     r = rank_for(cfg, channel)
@@ -217,10 +234,17 @@ def run_m_scan(cfg: Config, channel: str, snr_db: float, m_values: Sequence[int]
             sigma_used = sigma_from_snr(system.X, snr_db, convention=cfg.noise.convention)
 
         rng_noise = derive_rng(seed, channel, snr_db, "scan", PURPOSE_NOISE, j)
-        Xn, Yn, _ = inject(system.X, system.Y, sigma_used, rng_noise, mode=cfg.noise.mode)
+        # 以 sigma=1 生成单位方差噪声轨迹；逐 m 再缩放，保证嵌套结构
+        Xn1, Yn1, _ = inject(system.X, system.Y, 1.0, rng_noise, mode=cfg.noise.mode)
 
         for mm in ms:
-            Xs, Ys = Xn[:, :mm], Yn[:, :mm]
+            if snr_normalization == "per_m":
+                sig = sigma_from_snr(system.X[:, :mm], snr_db,
+                                     convention=cfg.noise.convention)
+            else:
+                sig = sigma_used
+            Xs = system.X[:, :mm] + sig * (Xn1[:, :mm] - system.X[:, :mm])
+            Ys = system.Y[:, :mm] + sig * (Yn1[:, :mm] - system.Y[:, :mm])
             for name in methods:
                 res = REGISTRY[name]().fit(Xs, Ys, r, cfg.oscillator.dt)
                 pr = pair_to_truth(res.freqs, system.f_true)
@@ -249,9 +273,15 @@ def run_m_scan(cfg: Config, channel: str, snr_db: float, m_values: Sequence[int]
                 "rank": r,
                 "noise_mode": cfg.noise.mode,
                 "snr_convention": cfg.noise.convention,
+                "snr_normalization": snr_normalization,
                 "master_seed": seed,
                 "nested": True,
                 "m_max": m_max,
+                "sigma_this_m": (
+                    sigma_from_snr(system.X[:, :mm], snr_db,
+                                   convention=cfg.noise.convention)
+                    if snr_normalization == "per_m" else sigma_used
+                ),
                 "pair_fail": pair_fail[mm],
             },
         )
