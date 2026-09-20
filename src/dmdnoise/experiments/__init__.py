@@ -21,12 +21,30 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp4_robustness import (
+    SEPARATIONS,
+    WINDOW_DECAYS,
+    Exp4Result,
+    RobustPoint,
+    default_points as robustness_points,
+    run as run_exp4,
+    verdict as verdict_exp4,
+    zeta_from_decay,
+)
 
 M_DEFAULT = 200
 METHODS = ("dmd", "tdmd")
 
 __all__ = [
     "EXP2_SNR_DB",
+    "SEPARATIONS",
+    "WINDOW_DECAYS",
+    "Exp4Result",
+    "RobustPoint",
+    "robustness_points",
+    "run_exp4",
+    "verdict_exp4",
+    "zeta_from_decay",
     "K_GRID",
     "M_DEFAULT",
     "METHODS",

@@ -450,10 +450,54 @@ def fig10_decision_map(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig10_decision_map")
 
 
+
+# --------------------------------------------------------------------------- fig11
+def fig11_robustness(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig11 参数稳健性：偏差对模态间隔与窗内衰减的敏感性（实验四）。"""
+    v = t.get("exp4_verdict")
+    if v is None:
+        return None
+    v = v[v["可用"].eq(True)] if "可用" in v.columns else v
+    if v.empty:
+        return None
+    channels = sorted(v["channel"].unique())
+    fig, axes = plt.subplots(len(channels), 2, figsize=(11, 4.0 * len(channels)),
+                             squeeze=False)
+    for r, ch in enumerate(channels):
+        g = v[v["channel"] == ch]
+        # 左：偏差 vs 模态间隔（线 = 窗内衰减）
+        for i, dec in enumerate(sorted(g["window_decay"].unique(), reverse=True)):
+            gg = g[g["window_decay"] == dec].sort_values("f2_over_f1")
+            if gg.empty:
+                continue
+            axes[r][0].plot(gg["f2_over_f1"], gg["DMD_偏差"], marker="o", ms=4,
+                            color=plt.get_cmap("viridis")(i / 3.0),
+                            label=f"衰减={dec:.2f}")
+        # 右：偏差 vs 窗内衰减（线 = 模态间隔）
+        for i, sep in enumerate(sorted(g["f2_over_f1"].unique())):
+            gg = g[g["f2_over_f1"] == sep].sort_values("window_decay")
+            if gg.empty:
+                continue
+            axes[r][1].plot(gg["window_decay"], gg["DMD_偏差"], marker="s", ms=4,
+                            color=plt.get_cmap("plasma")(i / 3.0),
+                            label=f"$f_2/f_1$={sep:.2f}")
+        for c in (0, 1):
+            axes[r][c].set_yscale("log")
+            axes[r][c].set_ylabel("DMD 相对偏差 |bias|")
+            axes[r][c].legend(fontsize=7, title=None)
+        axes[r][0].set_xlabel("模态频率间隔 $f_2/f_1$")
+        axes[r][1].set_xlabel("窗内幅度衰减 $d$")
+        axes[r][0].set_title(f"{ch} · 偏差 vs 模态间隔")
+        axes[r][1].set_title(f"{ch} · 偏差 vs 窗内衰减")
+    fig.suptitle("图 11  参数稳健性：偏差对两个物理参数的敏感性（仅列可用网格点）")
+    return _save(fig, d, "fig11_robustness")
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
-           fig8_slopes, fig9_rank_robustness, fig10_decision_map)
+           fig8_slopes, fig9_rank_robustness, fig10_decision_map,
+           fig11_robustness)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -463,6 +507,7 @@ _FILES = {
     "exp2_slopes_m_max": "exp2_slopes_m_max.csv",
     "exp2_slopes_per_m": "exp2_slopes_per_m.csv",
     "exp3_rank": "exp3_rank_mismatch.csv",
+    "exp4_verdict": "exp4_verdict.csv",
     "exp3_robust": "exp3_robust.csv",
 }
 

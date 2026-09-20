@@ -43,6 +43,10 @@ from dmdnoise.experiments import (  # noqa: E402
     run_exp2,
     run_exp3,
 )
+from dmdnoise.experiments import (  # noqa: E402
+    run_exp4,
+    verdict_exp4,
+)
 from dmdnoise.report import make_all as make_figures  # noqa: E402
 
 LOG = logging.getLogger("run_experiment")
@@ -186,6 +190,39 @@ def run_exp3_cli(cfg: Config, out: Path, *, smoke: bool) -> int:
     return 0
 
 
+def run_exp4_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
+    """实验四：参数稳健性复核（模态间隔 x 窗内衰减）。"""
+    if smoke:
+        from dmdnoise.experiments import RobustPoint
+
+        pts = [RobustPoint("complex", s, d, 8, 10.0)
+               for s in (1.25, 1.83) for d in (0.90, 0.50)]
+        j = 400
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    else:
+        pts, j = None, cfg.grid.j_main
+
+    res = run_exp4(cfg, points=pts, j_total=j, progress=make_progress("exp4"))
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    res.table.to_csv(out / ("exp4_robustness" + suffix + ".csv"), index=False,
+                     encoding="utf-8")
+    res.paired.to_csv(out / ("exp4_paired" + suffix + ".csv"), index=False,
+                      encoding="utf-8")
+    res.constraints.to_csv(out / ("exp4_constraints" + suffix + ".csv"), index=False,
+                           encoding="utf-8")
+    v = verdict_exp4(res)
+    v.to_csv(out / ("exp4_verdict" + suffix + ".csv"), index=False, encoding="utf-8")
+    write_json(out / ("exp4_meta" + suffix + ".json"),
+               {"experiment": "exp4", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp4_*.csv（%d 行明细）", len(res.table))
+    print()
+    print("=== 实验四 · 参数稳健性判定（模态间隔 x 窗内衰减）===")
+    print(v.to_string(index=False))
+    return 0
+
+
 def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     """由 results/tables 下的 CSV 生成 fig1-fig10。只读 CSV，不重跑实验。"""
     fig_dir = ROOT / cfg.run.out_dir / "figures"
@@ -201,13 +238,13 @@ def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
 
 
 RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli,
-           "figures": run_figures_cli}
+           "exp4": run_exp4_cli, "figures": run_figures_cli}
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
     ap.add_argument("--exp", default="exp1",
-                    choices=["exp1", "exp2", "exp3", "figures", "all"])
+                    choices=["exp1", "exp2", "exp3", "exp4", "figures", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
     ap.add_argument("--smoke", action="store_true", help="小规模冒烟运行")
@@ -235,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     LOG.info("BLAS 线程 OPENBLAS_NUM_THREADS=%s", os.environ["OPENBLAS_NUM_THREADS"])
     save_fingerprint(cfg, results, out / "config_meta.json")
 
-    targets = (["exp1", "exp2", "exp3", "figures"] if args.exp == "all"
+    targets = (["exp1", "exp2", "exp3", "exp4", "figures"] if args.exp == "all"
                else [args.exp])
     rc = 0
     for name in targets:
