@@ -603,11 +603,73 @@ def fig13_end_to_end(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig13_end_to_end")
 
 
+
+# --------------------------------------------------------------------------- fig14
+def fig14_rank_schemes(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig14 秩估计方案的补救效果（实验七）。"""
+    v = t.get("exp7_verdict")
+    if v is None or v.empty:
+        return None
+    v = v[v["总组合数"] > 0]
+    if v.empty:
+        return None
+    criteria = sorted(v["criterion"].unique())
+    schemes = [x for x in ("iter", "single", "multi", "damped")
+               if x in set(v["scheme"])]
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
+    cmap = plt.get_cmap("Set2")
+    x = np.arange(len(criteria))
+    w = 0.8 / max(len(schemes), 1)
+
+    def _vals(col, agg="first"):
+        out = []
+        for c in criteria:
+            row = v[v["criterion"] == c].set_index("scheme").reindex(schemes)
+            out.append(row[col].to_numpy(float))
+        return np.array(out)          # (n_criteria, n_schemes)
+
+    p_exact = _vals("秩判对率")
+    for i, sch in enumerate(schemes):
+        axes[0].bar(x + i * w, p_exact[:, i], width=w, color=cmap(i), label=sch)
+    axes[0].set_xticks(x + w)
+    axes[0].set_xticklabels(criteria, fontsize=8, rotation=12)
+    axes[0].set_ylim(0, 1.08)
+    axes[0].set_ylabel("秩判对率")
+    axes[0].set_title("秩判定正确率")
+    axes[0].legend(fontsize=8)
+
+    sh = _vals("sigma_hat/sigma_true")
+    for i, sch in enumerate(schemes):
+        axes[1].bar(x + i * w, sh[:, i], width=w, color=cmap(i), label=sch)
+    axes[1].axhline(1.0, color="k", ls="--", lw=1.2)
+    axes[1].set_yscale("log")
+    axes[1].set_xticks(x + w)
+    axes[1].set_xticklabels(criteria, fontsize=8, rotation=12)
+    axes[1].set_ylabel("sigma_hat / sigma_true")
+    axes[1].set_title("噪声水平估计（真值 1.0）")
+
+    med = _vals("MSE比_中位")
+    mx = _vals("MSE比_最大")
+    for i, sch in enumerate(schemes):
+        axes[2].bar(x + i * w, np.nan_to_num(med[:, i], nan=0.0), width=w,
+                    color=cmap(i), label=sch)
+        axes[2].plot(x + i * w, np.nan_to_num(mx[:, i], nan=np.nan), "k_", ms=8)
+    axes[2].axhline(1.0, color="k", ls="--", lw=1.2)
+    axes[2].set_yscale("log")
+    axes[2].set_xticks(x + w)
+    axes[2].set_xticklabels(criteria, fontsize=8, rotation=12)
+    axes[2].set_ylabel("端到端 MSE 比 vs oracle")
+    axes[2].set_title("端到端退化（柱=中位，横线=最大）")
+    fig.suptitle("图 14  秩估计方案对比：single 是唯一有效补救，damped 与 multi 均无效")
+    return _save(fig, d, "fig14_rank_schemes")
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
            fig8_slopes, fig9_rank_robustness, fig10_decision_map,
-           fig11_robustness, fig12_crossover, fig13_end_to_end)
+           fig11_robustness, fig12_crossover, fig13_end_to_end,
+           fig14_rank_schemes)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -622,6 +684,7 @@ _FILES = {
     "exp5_crossing": "exp5_crossing.csv",
     "exp6_rank_stats": "exp6_rank_stats.csv",
     "exp6_comparison": "exp6_comparison.csv",
+    "exp7_verdict": "exp7_verdict.csv",
     "exp3_robust": "exp3_robust.csv",
 }
 

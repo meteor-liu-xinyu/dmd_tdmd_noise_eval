@@ -21,6 +21,12 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp7_rank_schemes import (
+    CRITERIA as RANK_CRITERIA,
+    Exp7Result,
+    run as run_exp7,
+    verdict as verdict_exp7,
+)
 from dmdnoise.experiments.exp6_end_to_end import (
     Exp6Result,
     STRATEGIES as RANK_STRATEGIES,
@@ -49,7 +55,11 @@ METHODS = ("dmd", "tdmd")
 
 __all__ = [
     "COMBOS",
+    "RANK_CRITERIA",
     "RANK_STRATEGIES",
+    "Exp7Result",
+    "run_exp7",
+    "verdict_exp7",
     "Exp6Result",
     "run_exp6",
     "verdict_exp6",

@@ -212,3 +212,102 @@ def adaptive_sigma(Z: NDArray, *, method: str = "gavish_donoho",
             max_iter, method, rank, sigma_hat,
         )
     return (sigma_hat, rank, converged) if return_status else (sigma_hat, rank)
+
+
+# --------------------------------------------------------------------------- 抗虚假不动点方案
+#: 秩估计方案。`iter` 是现行交替迭代（基线，会落在虚假不动点上），其余为补救方案。
+SCHEMES = ("iter", "single", "multi", "damped")
+
+#: 多起点方案使用的初始 σ̂ 倍数
+MULTI_START_FACTORS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
+
+#: 阻尼方案的步长
+DAMPING_ALPHA = 0.3
+
+
+def _iterate(sv: NDArray, m: int, n: int, method: str, sigma0: float,
+             *, max_iter: int = 40, alpha: float = 1.0) -> tuple[float, int]:
+    """交替迭代内核。`alpha=1` 为原版；`alpha<1` 为阻尼版。"""
+    sigma_hat = float(sigma0)
+    rank = 1
+    for _ in range(max_iter):
+        est = estimate_rank(sv, sigma_hat=sigma_hat, m=m, n=n, method=method)
+        rank_new = min(max(int(est.rank), 1), min(m, n))
+        resid = math.sqrt(max(float(np.sum(sv[rank_new:] ** 2)), 0.0))
+        sigma_resid = residual_sigma(resid, m, n)
+        if rank_new == rank:
+            sigma_hat = (1.0 - alpha) * sigma_hat + alpha * sigma_resid
+            if abs(sigma_resid - sigma_hat) <= 1e-12 * max(sigma_hat, 1e-300):
+                break
+            rank = rank_new
+            continue
+        rank = rank_new
+        sigma_hat = (1.0 - alpha) * sigma_hat + alpha * sigma_resid
+    return sigma_hat, rank
+
+
+def robust_sigma_rank(Z: NDArray, *, method: str = "marchenko_pastur",
+                      scheme: str = "single", sv: NDArray | None = None
+                      ) -> tuple[float, int]:
+    """在 `σ` 未知时**稳健地**定秩，规避自举迭代的虚假不动点。
+
+    四种方案的机理差异：
+
+    `iter`（基线）
+        原版交替迭代。`σ̂` 依赖型判据会收敛到自洽但错误的不动点。
+
+    `single`（★ 推荐）
+        断掉反馈回路：先用 **`gavish_donoho`**（阈值不依赖 `σ̂`）定秩 `r₀`，
+        由 `r₀` 的残差得 `σ̂`，再用**目标判据**定秩一次，**不迭代**。
+        既然 GD 能给出正确秩，就不该让 `σ̂` 的迭代去污染它。
+
+    `multi`
+        从 `MULTI_START_FACTORS` 倍初始 `σ̂` 出发分别迭代，取 `r̂` 的中位数。
+        对初值鲁棒，但若吸引域整体偏移则无效。
+
+    `damped`
+        阻尼迭代 `σ̂ ← (1-α)σ̂ + α·σ̂_残差`（`α=DAMPING_ALPHA`），
+        减缓失控速度。**只降低速率，不改变不动点位置。**
+
+    返回 `(σ̂, r̂)`。
+    """
+    if scheme not in SCHEMES:
+        raise RankError(f"未知方案 {scheme!r}，可选 {SCHEMES}")
+    if method not in VALID_METHODS:
+        raise RankError(f"未知秩判据 {method!r}，可选 {VALID_METHODS}")
+
+    Z = np.asarray(Z)
+    m, n = Z.shape
+    if sv is None:
+        sv = np.linalg.svd(Z, compute_uv=False)
+    else:
+        sv = np.asarray(sv, dtype=float)
+    if sv[0] <= 0:
+        raise RankError("Z 的首奇异值非正")
+
+    sigma_init = residual_sigma(float(np.linalg.norm(Z)), m, n)
+
+    if scheme == "iter":
+        return _iterate(sv, m, n, method, sigma_init)
+
+    if scheme == "single":
+        # 用 GD 定秩（不依赖 σ̂），再由该秩的残差得到 σ̂，最后一次性应用目标判据
+        r0 = estimate_rank(sv, sigma_hat=sigma_init, m=m, n=n,
+                           method="gavish_donoho").rank
+        r0 = min(max(int(r0), 1), min(m, n))
+        sigma_hat = residual_sigma(
+            math.sqrt(max(float(np.sum(sv[r0:] ** 2)), 0.0)), m, n)
+        r1 = estimate_rank(sv, sigma_hat=sigma_hat, m=m, n=n, method=method).rank
+        return sigma_hat, min(max(int(r1), 1), min(m, n))
+
+    if scheme == "multi":
+        # ⚠️ 必须返回**连贯的一对** (σ̂, r̂)——即中位秩所属的那次迭代结果。
+        # 若分别取 σ̂ 与 r̂ 的边际中位数，两者来自不同起点，会出现
+        # "σ̂ 看着准确（≈1.0）但对应的秩完全错误"的假象（已由测试捕获）。
+        pairs = [_iterate(sv, m, n, method, sigma_init * f)
+                 for f in MULTI_START_FACTORS]
+        pairs.sort(key=lambda pr: pr[1])
+        return pairs[len(pairs) // 2]
+
+    # damped
+    return _iterate(sv, m, n, method, sigma_init, alpha=DAMPING_ALPHA)
