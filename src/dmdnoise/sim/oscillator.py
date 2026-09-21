@@ -188,6 +188,10 @@ def build_real(cfg: Config, rng: np.random.Generator, m: int,
             "dim": dim,
             "energy_ratio": float(energy.max() / energy.min()),
             "amp_ratio_target": amp_ratio,
+            # 观测矩阵随实现随机抽取。**必须暴露出来**，否则
+            # "固定 C、只改频率"这类对照实验无法被验证（见 exp8 与
+            # tests/test_crossover_scatter.py::test_same_C_*）。
+            "C": C.copy(),
         },
     )
 

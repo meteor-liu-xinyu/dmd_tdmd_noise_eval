@@ -664,12 +664,63 @@ def fig14_rank_schemes(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig14_rank_schemes")
 
 
+
+# --------------------------------------------------------------------------- fig15
+def fig15_crossover_scatter(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig15 交叉点的实现间散布（实验八）。"""
+    tab = t.get("exp8_table")
+    cr = t.get("exp8_crossings")
+    if tab is None or tab.empty:
+        return None
+    modes = sorted(tab["mode"].unique())
+    nvals = sorted(tab["n_axis"].unique())
+    seps = sorted(tab["f2_over_f1"].unique())
+    fig, axes = plt.subplots(len(modes), 2, figsize=(12.5, 4.0 * len(modes)),
+                             squeeze=False)
+    cmap = plt.get_cmap("tab10")
+    for r, mode in enumerate(modes):
+        # 左：rho 随 C 配置的散布
+        for i, n in enumerate(nvals):
+            for j, sep in enumerate(seps):
+                g = tab[(tab["mode"] == mode) & (tab["n_axis"] == n)
+                        & (tab["f2_over_f1"] == sep)].sort_values("config")
+                if g.empty:
+                    continue
+                axes[r][0].plot(g["config"], g["rho"], marker="o", ms=3,
+                                color=cmap((i * len(seps) + j) % 10),
+                                label=f"n={n} sep={sep:.2f}")
+        axes[r][0].axhline(1.0, color="k", ls="--", lw=1.3)
+        axes[r][0].set_yscale("log")
+        axes[r][0].set_xlabel("观测矩阵 C 的实现编号")
+        axes[r][0].set_ylabel("降偏比 rho")
+        axes[r][0].set_title(f"模态 {mode}：rho 随 C 实现的散布")
+        axes[r][0].legend(fontsize=6, ncol=2)
+
+        # 右：交叉点分布
+        for i, n in enumerate(nvals):
+            if cr is None:
+                continue
+            g = cr[(cr["mode"] == mode) & (cr["n_axis"] == n)]["crossing"].dropna()
+            if g.empty:
+                continue
+            jitter = (np.random.default_rng(0).random(g.size) - 0.5) * 0.12
+            axes[r][1].plot(np.full(g.size, i) + jitter, g.to_numpy(float), "o",
+                            ms=5, color=cmap(i), alpha=0.8)
+            axes[r][1].plot([i - 0.25, i + 0.25], [g.median()] * 2, "k-", lw=2)
+        axes[r][1].set_xticks(range(len(nvals)))
+        axes[r][1].set_xticklabels([f"n={n}" for n in nvals])
+        axes[r][1].set_ylabel("交叉点估计 $f_2/f_1$")
+        axes[r][1].set_title(f"模态 {mode}：交叉点随 n 的分布（横线=中位）")
+    fig.suptitle("图 15  交叉点的实现间散布：同一 n 下的差异与 n 之间的差异同量级")
+    return _save(fig, d, "fig15_crossover_scatter")
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
            fig8_slopes, fig9_rank_robustness, fig10_decision_map,
            fig11_robustness, fig12_crossover, fig13_end_to_end,
-           fig14_rank_schemes)
+           fig14_rank_schemes, fig15_crossover_scatter)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -685,6 +736,8 @@ _FILES = {
     "exp6_rank_stats": "exp6_rank_stats.csv",
     "exp6_comparison": "exp6_comparison.csv",
     "exp7_verdict": "exp7_verdict.csv",
+    "exp8_table": "exp8_table.csv",
+    "exp8_crossings": "exp8_crossings.csv",
     "exp3_robust": "exp3_robust.csv",
 }
 

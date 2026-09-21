@@ -48,10 +48,12 @@ from dmdnoise.experiments import (  # noqa: E402
     run_exp5,
     run_exp6,
     run_exp7,
+    run_exp8,
     summary_exp5,
     verdict_exp4,
     verdict_exp6,
     verdict_exp7,
+    verdict_exp8,
 )
 from dmdnoise.report import make_all as make_figures  # noqa: E402
 
@@ -311,6 +313,33 @@ def run_exp7_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     return 0
 
 
+def run_exp8_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
+    """实验八：交叉点的实现间散布（判定"随 n 非单调"是否为真）。"""
+    if smoke:
+        kw = {"n_values": (16,), "k_configs": 3, "j_total": 300}
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    else:
+        kw = {"j_total": 800}
+    res = run_exp8(cfg, progress=make_progress("exp8"), **kw)
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    for name, df in (("exp8_table", res.table), ("exp8_crossings", res.crossings),
+                     ("exp8_spread", res.spread),
+                     ("exp8_verdict", verdict_exp8(res))):
+        df.to_csv(out / (name + suffix + ".csv"), index=False, encoding="utf-8")
+    write_json(out / ("exp8_meta" + suffix + ".json"),
+               {"experiment": "exp8", "smoke": smoke,
+                "fingerprint": res.fingerprint, **res.meta})
+    LOG.info("已写出 exp8_*.csv（%d 行明细）", len(res.table))
+    print()
+    print("=== 实验八 · 交叉点分布的 n 间对比 ===")
+    print(verdict_exp8(res).to_string(index=False))
+    print()
+    print("=== 逐 (n, 模态) 分布统计 ===")
+    print(res.spread.to_string(index=False))
+    return 0
+
+
 def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     """由 results/tables 下的 CSV 生成 fig1-fig10。只读 CSV，不重跑实验。"""
     fig_dir = ROOT / cfg.run.out_dir / "figures"
@@ -327,14 +356,15 @@ def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
 
 RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli,
            "exp4": run_exp4_cli, "exp5": run_exp5_cli, "exp6": run_exp6_cli,
-           "exp7": run_exp7_cli, "figures": run_figures_cli}
+           "exp7": run_exp7_cli, "exp8": run_exp8_cli,
+           "figures": run_figures_cli}
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
     ap.add_argument("--exp", default="exp1",
                     choices=["exp1", "exp2", "exp3", "exp4", "exp5", "exp6",
-                             "exp7", "figures", "all"])
+                             "exp7", "exp8", "figures", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
     ap.add_argument("--smoke", action="store_true", help="小规模冒烟运行")
@@ -363,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     save_fingerprint(cfg, results, out / "config_meta.json")
 
     targets = (["exp1", "exp2", "exp3", "exp4", "exp5", "exp6", "exp7",
-                "figures"] if args.exp == "all"
+                "exp8", "figures"] if args.exp == "all"
                else [args.exp])
     rc = 0
     for name in targets:
