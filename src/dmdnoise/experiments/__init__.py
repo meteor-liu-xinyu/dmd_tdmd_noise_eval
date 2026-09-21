@@ -21,6 +21,13 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp9_colored_noise import (
+    NOISE_GRID,
+    Exp9Result,
+    NoiseSpec,
+    run as run_exp9,
+    verdict as verdict_exp9,
+)
 from dmdnoise.experiments.exp8_crossover_scatter import (
     Exp8Result,
     run as run_exp8,
@@ -60,6 +67,11 @@ METHODS = ("dmd", "tdmd")
 
 __all__ = [
     "COMBOS",
+    "NOISE_GRID",
+    "NoiseSpec",
+    "Exp9Result",
+    "run_exp9",
+    "verdict_exp9",
     "Exp8Result",
     "run_exp8",
     "verdict_exp8",

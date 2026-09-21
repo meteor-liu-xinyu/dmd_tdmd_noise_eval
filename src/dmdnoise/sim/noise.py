@@ -38,6 +38,53 @@ def _noise_like(shape: tuple[int, ...], sigma: float, rng: np.random.Generator,
     return sigma * z
 
 
+def _unit_noise(shape: tuple[int, ...], rng: np.random.Generator,
+                complex_: bool) -> NDArray:
+    """单位方差的零均值白噪声（复值时 E|z|² = 1）。"""
+    if complex_:
+        return (rng.standard_normal(shape) + 1j * rng.standard_normal(shape)) / math.sqrt(2.0)
+    return rng.standard_normal(shape)
+
+
+def _colored_noise(shape: tuple[int, ...], sigma: float, rng: np.random.Generator,
+                   complex_: bool, *, ar1: float = 0.0, spatial: float = 0.0) -> NDArray:
+    """零均值、**逐元素单位方差**的（可）有色高斯噪声。
+
+    ar1      时间方向的 AR(1) 相关：`x_t = rho·x_{t-1} + sqrt(1-rho²)·w_t`。
+             该构造的**边际方差恒为 1**（见测试），故 `sigma` 仍表示逐元素标准差、
+             `sigma_from_snr` 的标定不被破坏。
+    spatial  通道方向的指数相关：`R_ij = spatial^{|i-j|}`，用 Cholesky 因子施加，
+             同样保持对角线为 1（单位方差）。
+
+    两者可叠加（先时间后空间）。`ar1 = spatial = 0` 时退化为白噪声。
+    """
+    n, T = shape
+    if ar1 <= 0.0 and spatial <= 0.0:
+        return _noise_like(shape, sigma, rng, complex_)
+
+    w = _unit_noise(shape, rng, complex_)
+
+    if ar1 > 0.0:
+        if ar1 >= 1.0:
+            raise NoiseError("ar1 必须落在 [0, 1)")
+        x = np.empty_like(w)
+        x[:, 0] = w[:, 0]
+        c = math.sqrt(1.0 - ar1 * ar1)
+        for t in range(1, T):
+            x[:, t] = ar1 * x[:, t - 1] + c * w[:, t]
+        w = x
+
+    if spatial > 0.0:
+        if spatial >= 1.0:
+            raise NoiseError("spatial 必须落在 [0, 1)")
+        idx = np.arange(n)
+        R = spatial ** np.abs(idx[:, None] - idx[None, :])
+        L = np.linalg.cholesky(R + 1e-12 * np.eye(n))
+        w = L @ w
+
+    return sigma * w
+
+
 def sigma_from_snr(X_true: NDArray, snr_db: float, *, convention: str = "aggregate",
                    fixed_sigma: float | None = None) -> float:
     """由目标 SNR 反解逐元素噪声标准差。
@@ -73,12 +120,16 @@ def snr_from_eps(eps: float) -> float:
 
 
 def inject(X_true: NDArray, Y_true: NDArray, sigma: float, rng: np.random.Generator,
-           *, mode: str = "trajectory") -> tuple[NDArray, NDArray, dict[str, Any]]:
+           *, mode: str = "trajectory", ar1: float = 0.0,
+           spatial: float = 0.0) -> tuple[NDArray, NDArray, dict[str, Any]]:
     """注入噪声，返回 (X, Y, meta)。
 
     trajectory   —— 单条噪声轨迹：以完整序列 (m+1 列) 加噪后切片，
                     使 dX[:, 1:] 与 dY[:, :-1] 逐元素相等
     independent  —— X 与 Y 各自独立加噪（破坏两侧误差的相关结构，仅作对照）
+
+    `ar1` / `spatial` 为非零时注入**有色**噪声（时间 AR(1) / 通道指数相关），
+    两者均保持逐元素单位方差，故 `sigma` 的标定不变。默认全零 = 白噪声。
     """
     if mode not in VALID_MODES:
         raise NoiseError(f"mode 必须为 {VALID_MODES} 之一，收到 {mode!r}")
@@ -92,13 +143,16 @@ def inject(X_true: NDArray, Y_true: NDArray, sigma: float, rng: np.random.Genera
 
     if mode == "trajectory":
         full_true = np.concatenate([X_true, Y_true[:, -1:]], axis=1)
-        noisy = full_true + _noise_like(full_true.shape, sigma, rng, complex_)
+        noisy = full_true + _colored_noise(full_true.shape, sigma, rng, complex_,
+                                           ar1=ar1, spatial=spatial)
         X, Y = noisy[:, :m], noisy[:, 1 : m + 1]
         overlap_ok = bool(np.array_equal(X[:, 1:], Y[:, :-1]))
         noise_energy = float(np.linalg.norm(noisy[:, :m] - X_true) ** 2)
     else:
-        X = X_true + _noise_like(X_true.shape, sigma, rng, complex_)
-        Y = Y_true + _noise_like(Y_true.shape, sigma, rng, complex_)
+        X = X_true + _colored_noise(X_true.shape, sigma, rng, complex_,
+                                    ar1=ar1, spatial=spatial)
+        Y = Y_true + _colored_noise(Y_true.shape, sigma, rng, complex_,
+                                    ar1=ar1, spatial=spatial)
         overlap_ok = False
         noise_energy = (
             float(np.linalg.norm(X - X_true) ** 2) + float(np.linalg.norm(Y - Y_true) ** 2)
@@ -112,6 +166,8 @@ def inject(X_true: NDArray, Y_true: NDArray, sigma: float, rng: np.random.Genera
         "m": m,
         "overlap_ok": overlap_ok,
         "noise_energy_realized": noise_energy,
+        "ar1": float(ar1),
+        "spatial": float(spatial),
     }
     return X, Y, meta
 
