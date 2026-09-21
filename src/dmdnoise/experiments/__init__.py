@@ -21,6 +21,11 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp10_prewhiten import (
+    Exp10Result,
+    run as run_exp10,
+    verdict as verdict_exp10,
+)
 from dmdnoise.experiments.exp9_colored_noise import (
     NOISE_GRID,
     Exp9Result,
@@ -67,6 +72,9 @@ METHODS = ("dmd", "tdmd")
 
 __all__ = [
     "COMBOS",
+    "Exp10Result",
+    "run_exp10",
+    "verdict_exp10",
     "NOISE_GRID",
     "NoiseSpec",
     "Exp9Result",
