@@ -35,3 +35,6 @@ Thumbs.db
 
 # --- Agent ---
 /.workbuddy
+
+# 冒烟产物（数值不可用于结论，与正式结果分离存放）
+results/smoke/

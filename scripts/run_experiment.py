@@ -435,6 +435,10 @@ def main(argv: list[str] | None = None) -> int:
         results = validate(cfg)
 
     out = Path(args.out) if args.out else ROOT / cfg.run.out_dir / "tables"
+    if args.smoke and args.out is None:
+        # 冒烟产物与正式结果**物理分离**：其数值由 --smoke 明确声明不可用于结论，
+        # 若与正式结果同目录混放（仅差后缀），浏览时极易误取。
+        out = out.parent / "smoke"
     LOG.info("配置指纹 %s", config_fingerprint(cfg))
     LOG.info("约束：通过=%s，警戒=%s",
              all(r.passed for r in results), [r.name for r in results if r.warning])
