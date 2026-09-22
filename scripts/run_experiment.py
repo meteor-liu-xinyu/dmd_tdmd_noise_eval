@@ -51,6 +51,9 @@ from dmdnoise.experiments import (  # noqa: E402
     run_exp8,
     run_exp9,
     run_exp10,
+    run_exp11,
+    summary_exp11,
+    _jsonable,
     summary_exp5,
     verdict_exp4,
     verdict_exp6,
@@ -389,6 +392,52 @@ def run_exp10_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     return 0
 
 
+def run_exp11_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
+    """实验十一：原文 Figure 1 复现（外部一致性验证）。"""
+    if smoke:
+        kw = {"ms": (100,), "sigma2_grid": (0.05, 0.8, 3.2), "j_total": 120,
+              "j_controls": 40, "j_samples": 50,
+              "noise_modes": ("trajectory", "independent")}
+        LOG.warning("SMOKE 模式：仅验证流水线，数值不可用于结论")
+    else:
+        kw = {"j_total": 1500, "j_controls": 200, "j_samples": 300,
+              "noise_modes": ("trajectory", "independent")}
+    res = run_exp11(cfg, progress=make_progress("exp11"), **kw)
+    suffix = "_smoke" if smoke else ""
+    out.mkdir(parents=True, exist_ok=True)
+    for name, df in (("exp11_table", res.table),
+                     ("exp11_controls", res.controls),
+                     ("exp11_sigma_scan", res.sigma_scan),
+                     ("exp11_samples", res.samples),
+                     ("exp11_verdict", res.verdict)):
+        df.to_csv(out / (name + suffix + ".csv"), index=False, encoding="utf-8")
+    write_json(out / ("exp11_meta" + suffix + ".json"),
+               {"smoke": smoke, "fingerprint": res.fingerprint,
+                **{k: _jsonable(v) for k, v in res.meta.items()}})
+    LOG.info("已写出 exp11_*.csv（原文算例 %d 行、对照 %d 行、扫描 %d 行）",
+             len(res.table), len(res.controls), len(res.sigma_scan))
+    print()
+    print("=== 实验十一 · 原文 Figure 1 复现裁决 ===")
+    cols = ["来源", "噪声口径", "m", "sigma2", "DMD偏差", "TDMD偏差", "偏差比",
+            "DMD可分辨", "TDMD可分辨", "方差比_TDMD_over_DMD", "MAE差",
+            "MAE差下界", "MAE差上界", "TDMD更接近真值", "公共随机数生效", "无噪退化门"]
+    print(res.verdict[[c for c in cols if c in res.verdict.columns]].to_string(index=False))
+    print()
+    print("=== 交付代码 vs 原文公式 / 负对照 ===")
+    c = res.controls[res.controls["method"].str.startswith(("ref_vs", "diff_vs"))]
+    print(c[["m", "method", "bias_complex_abs"]].to_string(index=False))
+    print()
+    print("=== 偏差标度指数（预期 DMD~1、TDMD~2；仅用偏差可分辨的点拟合）===")
+    print(f"{'判据':>8} {'模态':>4} {'a':>7} {'用点数':>6} {'可分辨':>6} {'总点数':>6}")
+    for sl in res.meta["slopes"]:
+        print(f"{sl['method']:>8} {sl['mode']:>4} "
+              f"{sl['slope_log_bias_vs_log_sigma2']:>7.2f} {sl['n_sigma2']:>6} "
+              f"{sl.get('n_resolvable', 0):>6} {sl.get('n_sigma2_total', 0):>6}")
+    print()
+    print(summary_exp11(res))
+    return 0
+
+
 def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
     """由 results/tables 下的 CSV 生成 fig1-fig10。只读 CSV，不重跑实验。"""
     fig_dir = ROOT / cfg.run.out_dir / "figures"
@@ -406,6 +455,7 @@ def run_figures_cli(cfg: Config, out: Path, *, smoke: bool, **_) -> int:
 RUNNERS = {"exp1": run_exp1_cli, "exp2": run_exp2_cli, "exp3": run_exp3_cli,
            "exp4": run_exp4_cli, "exp5": run_exp5_cli, "exp6": run_exp6_cli,
            "exp7": run_exp7_cli, "exp8": run_exp8_cli, "exp9": run_exp9_cli, "exp10": run_exp10_cli,
+           "exp11": run_exp11_cli,
            "figures": run_figures_cli}
 
 
@@ -413,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="DMD/TDMD 偏差-方差实验入口")
     ap.add_argument("--exp", default="exp1",
                     choices=["exp1", "exp2", "exp3", "exp4", "exp5", "exp6",
-                             "exp7", "exp8", "exp9", "exp10","figures", "all"])
+                             "exp7", "exp8", "exp9", "exp10", "exp11", "figures", "all"])
     ap.add_argument("--config", default=None, help="YAML 配置路径；缺省用内置默认值")
     ap.add_argument("--out", default=None, help="输出目录；缺省 results/tables")
     ap.add_argument("--smoke", action="store_true", help="小规模冒烟运行")
@@ -446,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
     save_fingerprint(cfg, results, out / "config_meta.json")
 
     targets = (["exp1", "exp2", "exp3", "exp4", "exp5", "exp6", "exp7",
-                "exp8", "exp9", "exp10", "figures"] if args.exp == "all"
+                "exp8", "exp9", "exp10", "exp11", "figures"] if args.exp == "all"
                else [args.exp])
     rc = 0
     for name in targets:

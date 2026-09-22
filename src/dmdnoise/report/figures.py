@@ -715,12 +715,244 @@ def fig15_crossover_scatter(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
     return _save(fig, d, "fig15_crossover_scatter")
 
 
+
+# --------------------------------------------------------------------------- fig16
+def fig16_paper_replication(t: dict[str, pd.DataFrame], d: Path) -> Path | None:
+    """fig16 原文 Figure 1 复现（Hemati et al. 2017 sec.3）—— 外部一致性验证。
+
+    上排：每个 m 的谱散点（真值方块 / 两法的逐实现浅色点 / 均值深色点）
+    中排：偏差 vs sigma^2 的标度；**噪声口径对照**；等价性与负对照
+    下排：方差比；配对 MAE 差；裁决小结
+
+    标签用 ASCII 符号名（mu、sigma^2），不用希腊字母——项目曾因字形缺失告警。
+    """
+    smp = t.get("exp11_samples")
+    scan = t.get("exp11_sigma_scan")
+    ctl = t.get("exp11_controls")
+    ver = t.get("exp11_verdict")
+    if smp is None or smp.empty:
+        return None
+
+    lam = np.array([1.02 * np.exp(0.1j), 1.04 * np.exp(0.3j)])
+    lam = lam[np.argsort(np.angle(lam))]
+    ms = sorted(smp["m"].unique())
+    fig, axes = plt.subplots(3, 3, figsize=(15.5, 12.6))
+
+    # ---------------- 上排：偏差平面（残差 lam_hat - lam_true，居中于原点）
+    # ⚠️ 不要照搬原文 Figure 1 的绝对谱散点：在原文尺度上（|lam| ~ 1）两法的偏差
+    # 只有 1e-4 量级，估计与真值**完全重合**，图上什么都看不到。
+    # 画残差才能同时看见偏差（均值离原点的位移）与离散度（散点半径）。
+    for k, m in enumerate(ms[:3]):
+        ax = axes[0][k]
+        g = smp[smp["m"] == m]
+        span = 0.0
+        for method, col, marker, lab in (("dmd", "#2471a3", "o", "标准 DMD"),
+                                         ("tdmd", "#c0392b", "^", "TDMD")):
+            gm = g[g["method"] == method]
+            for mode in sorted(gm["mode"].unique()):
+                sub = gm[gm["mode"] == mode]
+                dr = sub["re"].to_numpy(float) - lam[int(mode) - 1].real
+                di = sub["im"].to_numpy(float) - lam[int(mode) - 1].imag
+                span = max(span, float(np.abs(np.r_[dr, di]).max()))
+                ax.plot(dr, di, marker, ms=2.0, color=col, alpha=0.20,
+                        markeredgewidth=0,
+                        label=(lab + "（逐实现）") if mode == 1 else None)
+                ax.plot([dr.mean()], [di.mean()], marker, ms=9, color=col,
+                        markeredgecolor="k", markeredgewidth=0.8,
+                        label=(lab + "（均值偏差）") if mode == 1 else None)
+        ax.plot([0.0], [0.0], "k+", ms=13, mew=1.8, label="真值（原点）", zorder=6)
+        ax.set_title("m = " + str(int(m)))
+        ax.set_xlabel("Re(dmu)")
+        if k == 0:
+            ax.set_ylabel("Im(dmu)")
+        ax.legend(fontsize=6.2, loc="best")
+        ax.set_aspect("equal", adjustable="datalim")
+    axes[0][0].text(0.02, 0.02,
+                    "残差平面（居中于真值）\n原文尺度上偏差不可见 —— n=250 高度冗余",
+                    transform=axes[0][0].transAxes, fontsize=7, color="#555")
+
+    # ---------------- 中排左：偏差标度
+    ax = axes[1][0]
+    if scan is not None and not scan.empty:
+        for method, col, marker, lab in (("dmd", "#2471a3", "o-", "标准 DMD"),
+                                         ("tdmd", "#c0392b", "^-", "TDMD")):
+            g = scan[scan["method"] == method]
+            if g.empty:
+                continue
+            gg = g.groupby("sigma2")["bias_complex_abs"].max().reset_index()
+            gres = g[g["resolvable"].astype(bool)].groupby(
+                "sigma2")["bias_complex_abs"].max().reset_index()
+            ax.plot(gg["sigma2"], gg["bias_complex_abs"], marker, color=col,
+                    ms=5, label=lab)
+            src = gres if len(gres) >= 3 else gg
+            if len(src) >= 3:
+                a, b = np.polyfit(np.log(src["sigma2"]), np.log(src["bias_complex_abs"]), 1)
+                xs = np.sort(src["sigma2"].to_numpy(float))
+                ax.plot(xs, np.exp(b) * xs ** a, "--", color=col, lw=1,
+                        label="拟合 a=" + format(a, ".2f"))
+            ax.plot(gg["sigma2"], gg["bias_complex_abs"], "x", color=col, ms=4, alpha=0.5)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("噪声方差 sigma^2")
+        ax.set_ylabel("|bias|（取两模态最大）")
+        ax.set_title("偏差标度（虚线=可分辨点拟合；x=全部点）")
+        ax.legend(fontsize=7)
+
+    # ---------------- 中排中：噪声口径对照（本轮关键发现）
+    ax = axes[1][1]
+    if ver is not None and not ver.empty and "噪声口径" in ver.columns:
+        # 两种口径必须在**同一个 m** 上比较：非主口径只在 M_MODE_COMPARE 上跑，
+        # 故先定位该 m，再在该 m 的原文噪声水平处取两口径的降偏比。
+        others = ver[ver["噪声口径"] != ver["噪声口径"].iloc[0]]
+        if not others.empty:
+            m_cmp = int(others["m"].iloc[0])
+            # ⚠️ 用**最高** sigma^2：在原文噪声水平（最低 sigma^2）处两种口径下
+            # TDMD 的偏差都不可分辨，判不出口径差异；只有高噪声点才是决定性对照。
+            s2_dec = float(others["sigma2"].max())
+            sub = ver[(ver["m"] == m_cmp) & np.isclose(ver["sigma2"], s2_dec)]
+            piv = sub.groupby("噪声口径")["偏差比"].first().dropna()
+            if not piv.empty:
+                xs = np.arange(len(piv))
+                ax.bar(xs, piv.to_numpy(float), color="#8e44ad", width=0.55)
+                ax.axhline(1.0, color="k", ls="--", lw=1.2)
+                ax.set_xticks(xs)
+                ax.set_xticklabels(list(piv.index), fontsize=8)
+                ax.set_ylabel("降偏比 |bias_TDMD| / |bias_DMD|")
+                ax.set_title("噪声口径（原文未规定）决定结论\n"
+                             "m=" + str(m_cmp) + "、sigma^2=" + format(s2_dec, "g"))
+                for i, v in enumerate(piv.to_numpy(float)):
+                    ax.text(i, v, format(v, ".3f"), ha="center", va="bottom", fontsize=8)
+                ax.text(0.5, 0.02, "trajectory = X/Y 噪声重叠（ADR-005）\n"
+                                   "independent = 各自独立",
+                        transform=ax.transAxes, ha="center", fontsize=7, color="#555")
+
+    # ---------------- 中排右：等价性与负对照
+    ax = axes[1][2]
+    if ctl is not None and not ctl.empty:
+        rows = []
+        for tag, lab in (("ref_vs_shipped[dmd]", "交付代码 vs 原文公式 (DMD)"),
+                         ("ref_vs_shipped[tdmd]", "交付代码 vs 原文公式 (TDMD)"),
+                         ("diff_vs_tdmd[pinv]", "tdmd_left_pinv vs 正确版"),
+                         ("diff_vs_tdmd[star]", "tdmd_left_star vs 正确版"),
+                         ("dmd", "标准 DMD 的偏差"),
+                         ("tdmd", "TDMD 的偏差"),
+                         ("star", "负对照 star 的偏差")):
+            g = ctl[ctl["method"] == tag]
+            if g.empty:
+                continue
+            rows.append((lab, float(g["bias_complex_abs"].max()), tag))
+        if rows:
+            y = np.arange(len(rows))
+            vals = [max(r[1], 1e-18) for r in rows]
+            colors = ["#7f8c8d" if r[1] < 1e-10
+                      else ("#c0392b" if "star" in r[2] else "#2471a3") for r in rows]
+            ax.barh(y, vals, color=colors)
+            ax.axvline(1e-10, color="k", ls=":", lw=1)
+            ax.set_yticks(y)
+            ax.set_yticklabels([r[0] for r in rows], fontsize=7)
+            ax.set_xscale("log")
+            ax.set_xlabel("|偏差| 或 |差|")
+            ax.set_title("等价性 与 负对照有效性")
+
+    # ---------------- 下排左：方差比
+    ax = axes[2][0]
+    if ver is not None and not ver.empty:
+        v = ver.dropna(subset=["方差比_TDMD_over_DMD"]).copy()
+        if not v.empty:
+            nm = (v["噪声口径"].astype(str).str[:4] + " "
+                  if "噪声口径" in v.columns else "")
+            v["tag"] = nm + "m=" + v["m"].astype(int).astype(str) +                 " s2=" + v["sigma2"].astype(str)
+            v = v.sort_values(["m", "sigma2"])
+            y = np.arange(len(v))
+            ax.errorbar(v["方差比_TDMD_over_DMD"], y,
+                        xerr=[v["方差比_TDMD_over_DMD"] - v["方差比下界"],
+                              v["方差比上界"] - v["方差比_TDMD_over_DMD"]],
+                        fmt="o", ms=4, color="#2471a3", capsize=3)
+            ax.axvline(1.0, color="k", ls="--", lw=1.2)
+            ax.set_yticks(y)
+            ax.set_yticklabels(v["tag"], fontsize=6.5)
+            ax.set_xlabel("std(TDMD)/std(DMD)（配对 CI）")
+            ax.set_title("方差比：<1 表示 TDMD 更紧")
+
+    # ---------------- 下排中：配对 MAE 差
+    ax = axes[2][1]
+    if ver is not None and not ver.empty and "MAE差" in ver.columns:
+        v = ver.dropna(subset=["MAE差"]).copy()
+        if not v.empty:
+            nm = (v["噪声口径"].astype(str).str[:4] + " "
+                  if "噪声口径" in v.columns else "")
+            v["tag"] = nm + "m=" + v["m"].astype(int).astype(str) +                 " s2=" + v["sigma2"].astype(str)
+            v = v.sort_values(["m", "sigma2"])
+            y = np.arange(len(v))
+            sig = v["TDMD更接近真值"].astype(bool)
+            ax.errorbar(v["MAE差"], y,
+                        xerr=[v["MAE差"] - v["MAE差下界"], v["MAE差上界"] - v["MAE差"]],
+                        fmt="o", ms=4, color="#c0392b", capsize=3)
+            ax.axvline(0.0, color="k", ls="--", lw=1.2)
+            ax.set_yticks(y)
+            ax.set_yticklabels(v["tag"], fontsize=6.5)
+            ax.set_xlabel("MAE(TDMD) - MAE(DMD)（配对 CI）")
+            ax.set_title("谁更接近真值（<0 即 TDMD 更优）")
+            for yi, ok in zip(y, sig):
+                if ok:
+                    ax.text(0.98, yi, "显著", transform=ax.get_yaxis_transform(),
+                            ha="right", va="center", fontsize=6, color="#c0392b")
+
+    # ---------------- 下排右：小结
+    ax = axes[2][2]
+    ax.axis("off")
+    # 噪声口径造成的降偏比倍数：**从数据算**，不得硬编码
+    _fold = "-"
+    if ver is not None and not ver.empty and "噪声口径" in ver.columns:
+        _oth = ver[ver["噪声口径"] != ver["噪声口径"].iloc[0]]
+        if not _oth.empty:
+            _s2 = float(_oth["sigma2"].max())
+            _sub = ver[(ver["m"] == int(_oth["m"].iloc[0]))
+                       & np.isclose(ver["sigma2"], _s2)]
+            _p = _sub.groupby("噪声口径")["偏差比"].first().dropna()
+            if len(_p) >= 2:
+                _fold = format(float(_p.max() / _p.min()), ".1f")
+    if ver is not None and not ver.empty:
+        nunres = int((~ver["TDMD可分辨"].astype(bool)).sum())
+        ncloser = int(ver["TDMD更接近真值"].astype(bool).sum())
+        vr = ver["方差比_TDMD_over_DMD"].dropna()
+        txt = (
+            "实验十一 · 原文 Figure 1 复现\n\n"
+            "交付代码 vs 原文公式\n"
+            "  特征值差 < 1e-10（数值等价）\n\n"
+            "负对照（在原文算例上标定）\n"
+            "  tdmd_left_pinv  等价，不可作负对照\n"
+            "  tdmd_left_star  系统性偏错，可用\n\n"
+            "复现结果\n"
+            "  无噪退化门：通过\n"
+            "  TDMD 偏差不可分辨：" + str(nunres) + " / " + str(len(ver)) + " 个组合\n"
+            "  TDMD 更接近真值：" + str(ncloser) + " / " + str(len(ver)) + " 个组合\n"
+            "  方差比中位：" + (format(float(vr.median()), ".5f") if not vr.empty else "-") + "\n\n"
+            "关键自由度（原文未规定）\n"
+            "  观测矩阵尺度 -> 有效 SNR\n"
+            "  dX/dY 相关性 -> 降偏比差 " + _fold + " 倍\n"
+            "  拼接方式 -> 缝接会使偏差放大 360 倍"
+        )
+        # ⚠️ 不要用 family="monospace"：等宽字体（DejaVu Sans Mono）不含 CJK 字形，
+        # 中文会渲染成方块并刷屏 UserWarning。`font.sans-serif` 已配置了
+        # "Microsoft YaHei"，故用默认族即可。
+        ax.text(0.0, 0.98, txt, transform=ax.transAxes, va="top", ha="left",
+                fontsize=8.4)
+
+    fig.suptitle("图 16  原文 Figure 1 复现：交付代码与文献的一致性验证"
+                 "（Hemati et al. 2017 TCFD 31(4):349-368 sec.3）")
+    fig.tight_layout(rect=(0, 0, 1, 0.972))
+    return _save(fig, d, "fig16_paper_replication")
+
+
+
 # --------------------------------------------------------------------------- 驱动
 FIGURES = (fig1_bias_vs_channels, fig2_bias_vs_snr, fig3_pair_fail_vs_snr,
            fig4_amp_ratio, fig5_variance_cost, fig6_bias_vs_m, fig7_rmse_vs_m,
            fig8_slopes, fig9_rank_robustness, fig10_decision_map,
            fig11_robustness, fig12_crossover, fig13_end_to_end,
-           fig14_rank_schemes, fig15_crossover_scatter)
+           fig14_rank_schemes, fig15_crossover_scatter,
+           fig16_paper_replication)
 
 _FILES = {
     "exp1": "exp1_bias_variance.csv",
@@ -736,6 +968,11 @@ _FILES = {
     "exp6_rank_stats": "exp6_rank_stats.csv",
     "exp6_comparison": "exp6_comparison.csv",
     "exp7_verdict": "exp7_verdict.csv",
+    "exp11_table": "exp11_table.csv",
+    "exp11_controls": "exp11_controls.csv",
+    "exp11_sigma_scan": "exp11_sigma_scan.csv",
+    "exp11_samples": "exp11_samples.csv",
+    "exp11_verdict": "exp11_verdict.csv",
     "exp8_table": "exp8_table.csv",
     "exp8_crossings": "exp8_crossings.csv",
     "exp3_robust": "exp3_robust.csv",

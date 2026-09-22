@@ -21,6 +21,12 @@ from dmdnoise.experiments.exp3_rank_sensitivity import (
     Exp3Result,
     run as run_exp3,
 )
+from dmdnoise.experiments.exp11_paper_replication import (
+    Exp11Result,
+    _jsonable,
+    run as run_exp11,
+    summary as summary_exp11,
+)
 from dmdnoise.experiments.exp10_prewhiten import (
     Exp10Result,
     run as run_exp10,
@@ -72,6 +78,10 @@ METHODS = ("dmd", "tdmd")
 
 __all__ = [
     "COMBOS",
+    "_jsonable",
+    "Exp11Result",
+    "run_exp11",
+    "summary_exp11",
     "Exp10Result",
     "run_exp10",
     "verdict_exp10",
