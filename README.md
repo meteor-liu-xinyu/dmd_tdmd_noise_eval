@@ -155,7 +155,7 @@ dmd_tdmd_noise_eval/
 |---|---|
 | `scripts/run_experiment.py --exp {exp1…exp11, figures, all}` | 跑实验、出图表。`--smoke` 写入 `results/smoke/`（**数值不可用于结论**），正式结果写入 `results/tables/` |
 | `scripts/export_pdf.py [docs/xx.md] [--all]` | 文档 → PDF（pandoc + xelatex）。自动校验**符号缺字**、**表格溢出**、**图片越界与字体嵌入** |
-| `scripts/check_report_consistency.py` | 核对报告与 README 中的规模数字（30 项）与仓库实际产物是否一致 |
+| `scripts/check_report_consistency.py` | 核对文档与仓库产物：**规模数字**（图表数、测试项数、行数、ADR 范围…）+ **结论性数值**（从 CSV 重算偏差降幅、交叉点、判对率…）。共 45 项 |
 | `scripts/insert_figures.py [--apply]` | 把 `fig1`–`fig16` 嵌入报告（含 caption 与编号）。默认 dry-run 打印插入计划 |
 
 完整复现：
