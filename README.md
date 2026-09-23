@@ -53,7 +53,7 @@ TDMD（Total DMD）是标准 DMD 的抗噪改进版，理论上能纠正这种�
 
 ### 5.1 已锁定的关键技术决策
 
-以下决策已生效，完整依据与可推翻条件见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §9 决策记录（ADR-001 ~ ADR-009）：
+以下决策已生效，完整依据与可推翻条件见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §9 决策记录（**ADR-001 ~ ADR-019**，共 19 条；下表为其中 9 条核心项）：
 
 | 项 | 决策 |
 |---|---|
@@ -102,33 +102,41 @@ TDMD（Total DMD）是标准 DMD 的抗噪改进版，理论上能纠正这种�
 
 | 项 | 量 |
 |---|---|
-| 基准总量 | **≈ 20 人日**（含 30% 缓冲） |
-| **已完成** | ≈ **12 人日**（文档与预验证 3 + M0–M4 实现 6 + 可行性标定与门验证 3） |
-| **剩余** | ≈ **8 人日**（M5–M8：三组实验、图表、决策表、技术报告） |
-| 代码规模 | ≈ 3 600 行（`src/` + `tests/`），实测 |
-| 算力 | 全部实验 ≈ 1.2 小时单核（实测），**不构成约束** |
+> ⚠️ 下表前三行是**规划时点**的估计；项目最终完成 M0–M8 与后续 exp4–exp11，
+> 实际规模见后两行（由 `scripts/check_report_consistency.py` 自动核对）。
+
+| 项 | 量 |
+|---|---|
+| 基准总量 | ≈ **20 人日**（含 30% 缓冲） |
+| 规划时点已完成 | ≈ **12 人日**（文档与预验证 3 + M0–M4 实现 6 + 可行性标定与门验证 3） |
+| 规划时点剩余 | ≈ **8 人日**（M5–M8：三组实验、图表、决策表、技术报告） |
+| **实际代码规模** | **9 152 行**（`src/` 6 727 + `tests/` 2 425），另 `scripts/` 835 行 |
+| **实际算力** | 单个实验 1–20 分钟单核（见 `results/tables/exp*_meta.json`），**不构成约束** |
 | 可选扩展 | 方案 3B +4 人日；方案 3C +6 人日 |
 
-风险分布已明显收窄：原"两个高不确定项"（M3 分歧调查、M4 机制解释）均已闭环，
-剩余为常规执行工作。详见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §6、§7、§10。
+规划时识别的两个高不确定项（M3 分歧调查、M4 机制解释）均已闭环。
+实际执行中额外完成了 8 组后续实验（`exp4`–`exp11`），并**四次推翻自己的中间结论**。
+详见 [`docs/implementation-plan.md`](docs/implementation-plan.md) §6、§7、§10 与
+[`docs/final-report.md`](docs/final-report.md) §8.4。
 
-## 7. 目录结构（规划）
+## 7. 目录结构
 
 ```
 dmd_tdmd_noise_eval/
 ├── README.md
 ├── .venv/                      # 项目虚拟环境（Python 3.12.10，不入版本库）
-├── docs/                       # 设计与协议文档
+├── docs/                       # 设计与协议文档（6 份 md + 申请书 .doc）
 ├── configs/                    # 实验配置（YAML）
 ├── src/dmdnoise/
-│   ├── sim/                    # 仿真器：双模态 LTI 系统 + 噪声注入
-│   ├── estimators/             # dmd.py / tdmd.py / rank.py
-│   ├── metrics.py              # 偏差 / 标准差 / MSE / RMSE
-│   ├── experiments/            # exp1 / exp2 / exp3 驱动脚本
-│   └── report/                 # 表格与图表生成
-├── scripts/                    # 命令行入口
-├── results/                    # raw / tables / figures（不入版本库）
-└── tests/                      # 正确性判据单元测试
+│   ├── sim/                    # 仿真器：双模态 LTI 系统、白/有色噪声注入
+│   ├── estimators/             # dmd / tdmd / variants / rank / prewhiten
+│   ├── metrics.py              # 偏差 / 标准差 / MSE / RMSE + 配对 bootstrap
+│   ├── mc.py                   # 蒙特卡洛驱动（公共随机数、嵌套前缀设计）
+│   ├── experiments/            # exp1–exp11 驱动模块
+│   └── report/                 # 表格与图表生成（fig1–fig16）
+├── scripts/                    # 命令行入口（见 §7.2）
+├── results/                    # tables / figures / smoke（不入版本库）
+└── tests/                      # 正确性判据单元测试（210 项）
 ```
 
 ### 7.1 环境
@@ -141,12 +149,34 @@ dmd_tdmd_noise_eval/
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 ```
 
+### 7.2 工具脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `scripts/run_experiment.py --exp {exp1…exp11, figures, all}` | 跑实验、出图表。`--smoke` 写入 `results/smoke/`（**数值不可用于结论**），正式结果写入 `results/tables/` |
+| `scripts/export_pdf.py [docs/xx.md] [--all]` | 文档 → PDF（pandoc + xelatex）。自动校验**符号缺字**与**表格溢出** |
+| `scripts/check_report_consistency.py` | 核对报告与 README 中的规模数字（30 项）与仓库实际产物是否一致 |
+
+完整复现：
+
+```bash
+.venv/Scripts/python.exe scripts/run_experiment.py --exp all      # 跑全部实验与图表
+.venv/Scripts/python.exe scripts/export_pdf.py                    # 导出报告 PDF
+.venv/Scripts/python.exe scripts/check_report_consistency.py      # 核对文档数字
+```
+
+> **为什么要有一致性检查**：报告与 README 里的图表张数、测试项数、代码行数、
+> ADR 编号范围、配置指纹分散在多处，**过期了不会有任何提示**。本项目已两次发生
+> 同类事故 —— 完整 review 时手工查出 4 处；新增 `exp11` 后页头、测试数、行数、
+> ADR 范围同时失效，且测试分解里整条 `test_paper_replication`（23 项）缺失。
+> 该脚本把这些数字改为**从产物实测**后逐一比对，**改完文档或新增实验后应跑一次**。
+
 ## 8. 当前状态
 
 - [x] 立项描述归档
 - [x] 文献核对与关键澄清（6 项修订）
 - [x] 实现规划、算法规格、实验协议
-- [x] 决策记录（ADR-001 ~ **ADR-018**）
+- [x] 决策记录（ADR-001 ~ **ADR-019**）
 - [x] 仿真参数设计约束数值校验（C3/C4/C6 处于警戒带）
 - [x] 项目虚拟环境（Python 3.12.10）
 - [x] **M0 配置层** — schema / 指纹 / C1–C6 校验

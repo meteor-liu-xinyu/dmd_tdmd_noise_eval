@@ -1,7 +1,7 @@
 # 最终报告 · 噪声下 DMD/TDMD 频率估计统计性能
 
-> 配置指纹 `6baac89bcfd5f22f` ｜ **11 个实验全部完成**（含 1 个失败记录）｜ 图表 fig1–fig15
-> 结果明细：`results/tables/`；图：`results/figures/`；决策记录：ADR-001 ~ ADR-018
+> 配置指纹 `6baac89bcfd5f22f` ｜ **11 个实验全部完成**（含 1 个失败记录）｜ 图表 fig1–fig16  
+> 结果明细：`results/tables/`；图：`results/figures/`；决策记录：ADR-001 ~ ADR-019  
 > 复现：`python scripts/run_experiment.py --exp all`
 
 ---
@@ -898,9 +898,9 @@ TDMD 的残余偏差不随之下降，最终反超。**这条边界与噪声水�
 | 类别 | 内容 |
 |---|---|
 | 文档 | `README.md`、`docs/algorithm-spec.md`、`docs/implementation-plan.md`、`docs/experiment-protocol.md`、`docs/exp1-results.md`、`docs/exp2-exp3-results.md`、本报告 |
-| 代码 | `src/dmdnoise/`：config / sim / estimators / metrics / mc / experiments / report（**6732 行**） |
-| 测试 | `tests/`（**2 040 行 / 187 项全部通过**）：`test_simulator` 33 + `test_colored_noise` 22 + `test_config` 16 + `test_estimators` 15 + `test_rank_schemes` 14 + `test_end_to_end` 12 + `test_robustness` 12 + `test_prewhiten` 12 + `test_crossover_scatter` 11 + `test_metrics` 10 + `test_mc` 10 + `test_crossover` 10 + `test_spectral_rank` 7 + `test_debias` 3（慢速判别性） |
-| 数据 | `results/tables/`：13 个主结果表共 **1 170 行**明细（加配对/汇总表共 1 278 行） |
+| 代码 | `src/dmdnoise/`：config / sim / estimators / metrics / mc / experiments / report（**6 727 行**）；另 `scripts/`（入口与导出工具）**835 行** |
+| 测试 | `tests/`（**2 425 行 / 210 项全部通过**）：`test_simulator` 33 + `test_paper_replication` 23 + `test_colored_noise` 22 + `test_config` 16 + `test_estimators` 15 + `test_rank_schemes` 14 + `test_end_to_end` 12 + `test_robustness` 12 + `test_prewhiten` 12 + `test_crossover_scatter` 11 + `test_mc` 10 + `test_metrics` 10 + `test_crossover` 10 + `test_spectral_rank` 7 + `test_debias` 3（慢速判别性） |
+| 数据 | `results/tables/`：**14 个主结果表共 1 190 行**明细（48 个正式 CSV 合计 5 882 行） |
 | 图表 | `results/figures/fig1`–`fig16`（共 16 张） |
 | 决策记录 | **ADR-001 ~ ADR-019** |
 
