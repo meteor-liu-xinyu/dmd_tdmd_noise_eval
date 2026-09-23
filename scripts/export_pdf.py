@@ -39,13 +39,27 @@
 宽度，超出页面只在日志里报 ``Overfull \\hbox`` —— PDF 里表现为**右侧被裁掉**，
 不报错。故统一把表格字号降为 ``\\footnotesize``。实测 Overfull **0 处**。
 
+**5. 图片尺寸与编号**。报告有 16 张图（``results/figures/``，共 2.1 MB）。
+
+- **路径**：tex 在 ``tmp/pdf_export/`` 下编译，而 md 里的链接写作
+  ``../results/figures/xxx.png`` —— 该相对路径在 tex 处会失效。故预处理把路径
+  剥成**纯文件名**，再用 ``\\graphicspath`` 指向真实目录。
+- **尺寸**：用 ``adjustbox`` 的 ``max width`` / ``max totalheight`` 限制**上界**
+  （只缩不放，放大位图只会变糊）。报告里既有超宽图（`fig2` 宽高比 3.91），
+  也有竖长图（`fig5` 宽高比 0.54 —— 按页宽缩放会高达 32 cm，远超页面）。
+- **编号**：必须**关掉 LaTeX 自动编号**（``\\captionsetup{labelformat=empty}``）。
+  自动编号按**出现顺序**计数，而本报告的图并非按 1–16 顺序出现（`fig10` 属 §3、
+  `fig16` 属 §2.15），实测把 `fig16` 标成「图 15」、`fig10` 标成「图 16」，
+  与正文引用的 `figN` 对不上。编号改由图 `scripts/insert_figures.py` 的
+  caption 文本提供。
+
 用法::
 
     python scripts/export_pdf.py                     # 导出 docs/final-report.md
     python scripts/export_pdf.py docs/algorithm-spec.md
     python scripts/export_pdf.py --all               # 导出 docs/ 下全部 .md
 
-依赖：``pandoc``、``xelatex``（TeX Live），以及 Windows 字体
+依赖：``pandoc``、``xelatex``（TeX Live，含 ``adjustbox`` 包），以及 Windows 字体
 ``Microsoft YaHei`` / ``Segoe UI Symbol`` / ``Cambria Math``。
 （可选）``pymupdf`` —— 装了则额外报告内嵌字体，未装则跳过该项检查。
 """
@@ -72,6 +86,15 @@ COMBINING_HAT = "\u0302"
 
 #: 变体选择符-16。``⚠`` + 它构成 emoji 序列，xeCJK 无法处理（实测缺 15 处）→ 删除。
 VS16 = "\ufe0f"
+
+#: Markdown 里的图片引用。报告位于 ``docs/``、图片位于 ``results/figures/``，
+#: 故 md 中写作 ``../results/figures/xxx.png``；但 tex 是在 ``tmp/pdf_export/``
+#: 下编译的，该相对路径会失效 → 预处理时把路径剥成纯文件名，
+#: 再用 ``\graphicspath`` 指向真实目录。
+IMAGE_RE = re.compile(r"\]\((?:\.\./)?results/figures/([^)\s]+)\)")
+
+#: 图表目录（``\graphicspath`` 用）
+FIGDIR = ROOT / "results" / "figures"
 
 #: pandoc 的 ``--pdf-engine``
 ENGINE = "xelatex"
@@ -113,6 +136,9 @@ class BuildReport:
     missing_chars: list[str] = field(default_factory=list)
     overfull: int = 0
     max_overfull_pt: float = 0.0
+    #: 溢出量最大的几处（``"122.9pt in paragraph at lines 1234--1236"``）。
+    #: 只知数量不足以定位 —— 必须给出**位置**才能修。
+    worst_overfull: list[str] = field(default_factory=list)
     substituted: dict[str, int] = field(default_factory=dict)
     pages: int | None = None
     size_kb: float = 0.0
@@ -132,6 +158,9 @@ class BuildReport:
         lines.append(f"       缺字 {len(self.missing_chars)} 类；"
                      f"Overfull {self.overfull} 处，最大 {self.max_overfull_pt:.2f}pt"
                      f"（限 {OVERFULL_PT_LIMIT:g}pt）")
+        if self.max_overfull_pt > OVERFULL_PT_LIMIT and self.worst_overfull:
+            for w in self.worst_overfull:
+                lines.append(f"       !! 溢出 {w}")
         if self.fonts is not None:
             lines.append(f"       嵌入字体: {', '.join(self.fonts)}")
         if self.missing_chars:
@@ -154,6 +183,13 @@ def preprocess(md: str) -> tuple[str, dict[str, int]]:
     md = md.replace(VS16, "")
 
     subs = {"σ̂->σ^": n_hat, "⚠️->⚠": n_vs}
+
+    # 图片路径剥成纯文件名（配合 \graphicspath，见 IMAGE_RE 的说明）
+    n_img = len(IMAGE_RE.findall(md))
+    md = IMAGE_RE.sub(r"](\1)", md)
+    if n_img:
+        subs["图片路径->文件名"] = n_img
+
     return md, {k: v for k, v in subs.items() if v}
 
 
@@ -176,18 +212,40 @@ def _tex_escape(s: str) -> str:
     return s
 
 
-def header_tex(title: str = "") -> str:
+def header_tex(title: str = "", figdir: Path | None = None) -> str:
     """生成 LaTeX 导言片段。
 
-    只做元数据、表格缩放与断行容忍 —— 符号问题由字体选择解决，
+    只做元数据、图片路径与尺寸、表格缩放、断行容忍 —— 符号问题由字体选择解决，
     **不引入字符流劫持**（见模块 docstring 第 2 条）。
     """
     meta = ""
     if title:
         meta = ("\\AtBeginDocument{\\hypersetup{pdftitle={%s}}}\n"
                 % _tex_escape(title))
+
+    # 图片编号：**关闭 LaTeX 自动编号**，由 markdown 的 caption 文本自带「图 N」。
+    #
+    # ⚠️ 不能用自动编号：它按**出现顺序**计数，而本报告的图并非按 1–16 顺序出现
+    # （`fig10` 属 §3、`fig16` 属 §2.15，都排在后面），实测会把 `fig16` 标成
+    # 「图 15」、`fig10` 标成「图 16」，与正文引用的 `figN` 对不上。
+    meta += ("\\usepackage{caption}\n"
+             "\\captionsetup{labelformat=empty}\n")
+
+    graphics = ""
+    if figdir is not None:
+        # 绝对路径 + 正斜杠：tex 在 tmp/ 下编译，相对路径会失效
+        posix = str(figdir).replace("\\", "/")
+        graphics = f"\\graphicspath{{{{{posix}/}}}}\n"
+
     return f"""% 由 scripts/export_pdf.py 生成
-{meta}% 表格缩放：报告最宽 14 列，pandoc 的 longtable 为自然宽度，
+{meta}{graphics}% 图片尺寸：只设**上界**，不放大位图（放大只会变糊）。
+% 需要 `[export]` 才能把 adjustbox 的 max width 注册为 Gin 的键。
+% 报告里既有超宽图（fig2 宽高比 3.91），也有竖长图（fig5 宽高比 0.54，
+% 按页宽缩放会高达 32 cm、远超页面），故宽与高都要限。
+\\usepackage[export]{{adjustbox}}
+\\setkeys{{Gin}}{{max width=\\linewidth, max totalheight=0.62\\textheight, keepaspectratio}}
+
+% 表格缩放：报告最宽 14 列，pandoc 的 longtable 为自然宽度，
 % 超宽只在日志报 Overfull hbox、PDF 里右侧被静默裁掉。
 \\usepackage{{etoolbox}}
 \\AtBeginEnvironment{{longtable}}{{\\footnotesize}}
@@ -273,7 +331,8 @@ def build(src: Path, *, toc: bool = True, keep_work: bool = False) -> BuildRepor
 
     text, rep.substituted = preprocess(src.read_text(encoding="utf-8"))
     body.write_text(text, encoding="utf-8")
-    hdr.write_text(header_tex(_doc_title(src, text)), encoding="utf-8")
+    hdr.write_text(header_tex(_doc_title(src, text), FIGDIR if FIGDIR.is_dir() else None),
+                   encoding="utf-8")
 
     # ---- 第 1 步：pandoc 生成 .tex（不直接出 PDF，以便拿到完整 latex 日志）
     cmd = [
@@ -305,10 +364,13 @@ def build(src: Path, *, toc: bool = True, keep_work: bool = False) -> BuildRepor
     # ---- 诊断：缺字与溢出（只出现在 latex 日志里，不中断构建）
     rep.missing_chars = sorted(set(
         re.findall(r"Missing character: There is no (\S+)\s", log)))
-    widths = [float(v) for v in
-              re.findall(r"Overfull \\hbox \(([0-9.]+)pt too wide\)", log)]
+    # 日志形如：``Overfull \hbox (122.94pt too wide) in paragraph at lines 1234--1236``
+    hits = re.findall(r"Overfull \\hbox \(([0-9.]+)pt too wide\)([^\n]*)", log)
+    widths = [float(w) for w, _ in hits]
     rep.overfull = len(widths)
     rep.max_overfull_pt = max(widths) if widths else 0.0
+    rep.worst_overfull = [f"{float(w):.1f}pt{ctx.rstrip()}"
+                          for w, ctx in sorted(hits, key=lambda h: -float(h[0]))[:5]]
     rep.pages = _pdf_pages_from_log(log)
 
     # ---- 诊断：表格被裁切（缺字之外的另一种静默失败）
